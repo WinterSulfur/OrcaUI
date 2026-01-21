@@ -1,11 +1,12 @@
 # main.py
 import sys
+import json
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter, QTreeView,
     QFileSystemModel, QPlainTextEdit, QWidget, QVBoxLayout,
     QPushButton, QListWidget, QListWidgetItem, QHBoxLayout,
-    QMessageBox, QAbstractItemView, QLabel, QLineEdit
+    QMessageBox, QAbstractItemView, QLabel, QLineEdit, QDialog
 ) 
 from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu
 from PySide6.QtGui import QFont, QKeySequence, QShortcut, QIcon
@@ -41,6 +42,33 @@ class QueueListWidget(QListWidget):
             event.acceptProposedAction()
         super().dropEvent(event)
 
+class PipelineDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Pipeline")
+        self.resize(300, 100)
+
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Enter pipeline name")
+
+        btn_ok = QPushButton("Accept")
+        btn_cancel = QPushButton("Cancel")
+
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+
+        h_layout = QHBoxLayout()
+        h_layout.addWidget(btn_ok)
+        h_layout.addWidget(btn_cancel)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Pipeline name:"))
+        layout.addWidget(self.name_input)
+        layout.addLayout(h_layout)
+        self.setLayout(layout)
+
+    def get_name(self) -> str:
+        return self.name_input.text().strip()
 
 class OrcaGUI(QMainWindow):
     def __init__(self):
@@ -74,7 +102,7 @@ class OrcaGUI(QMainWindow):
         # === File system model ===
         self.model = QFileSystemModel()
         self.model.setRootPath("")
-        self.model.setNameFilters(["*.inp", "*.out", "*trj.xyz"])
+        self.model.setNameFilters(["*.inp", "*.out", "*trj.xyz", "*.json"])
         self.model.setNameFilterDisables(False)
 
         # === File tree (left panel) ===
@@ -129,6 +157,10 @@ class OrcaGUI(QMainWindow):
         queue_button_layout.addWidget(self.stop_queue_btn)
         queue_button_layout.addWidget(self.clear_queue_btn)
 
+        self.create_pipeline_btn = QPushButton("📦 Create Pipeline")
+        self.create_pipeline_btn.clicked.connect(self.create_pipeline)
+        queue_button_layout.addWidget(self.create_pipeline_btn)
+
         queue_button_container = QWidget()
         queue_button_container.setLayout(queue_button_layout)
 
@@ -160,7 +192,80 @@ class OrcaGUI(QMainWindow):
         self.queue.queue_finished.connect(self.on_queue_finished)
 
         # === Open initial folder ===
-        self.open_folder()
+        self.state_file = app_dir / "state.json"
+        self.load_state()
+
+    def save_state(self):
+        """Сохраняет текущее состояние в state.json."""
+        state = {
+            "root_path": str(self.model.rootPath()) if self.model.rootPath() else None,
+            "current_file": self.current_file if self.current_file else None,
+            "queue": []
+        }
+
+        # Сохраняем очередь
+        for i in range(len(self.queue._jobs)):
+            job = self.queue._jobs[i]
+            state["queue"].append({
+                "inp": str(job['inp']),
+                "display_name": job['display_name']
+            })
+
+        try:
+            with open(self.state_file, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[WARN] Failed to save state: {e}")
+
+    def load_state(self):
+        """Загружает состояние из state.json."""
+        if not self.state_file.is_file():
+            return
+
+        try:
+            with open(self.state_file, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+
+            # Восстанавливаем очередь
+            if "queue" in state:
+                for item in state["queue"]:
+                    inp_path = Path(item["inp"])
+                    if inp_path.is_file():
+                        out_path = inp_path.parent / ".." / "Results" / (inp_path.stem + ".out")
+                        out_path = out_path.resolve()
+                        # Воссоздаём job вручную (без display_name пересчёта)
+                        self.queue._jobs.append({
+                            'inp': inp_path,
+                            'out': out_path,
+                            'display_name': item.get('display_name', inp_path.name),
+                            'status': '⏹️ Pending'
+                        })
+                        # Обновляем UI
+                        display_name = item.get('display_name', inp_path.name)
+                        list_item = QListWidgetItem(f"⏹️ {display_name}")
+                        list_item.setData(Qt.UserRole, str(inp_path))
+                        list_item.setData(Qt.UserRole + 1, display_name)
+                        self.queue_list.addItem(list_item)
+
+            # Восстанавливаем открытый файл
+            if state.get("current_file") and Path(state["current_file"]).is_file():
+                self.current_file = state["current_file"]
+                try:
+                    with open(self.current_file, 'r', encoding='utf-8', errors='replace') as f:
+                        self.editor.setPlainText(f.read())
+                    self.file_path_label.setText(self.current_file)
+                except:
+                    pass
+
+            # Восстанавливаем корневую папку
+            root_path = state.get("root_path")
+            if root_path and Path(root_path).is_dir():
+                self.model.setRootPath(root_path)
+                self.tree.setRootIndex(self.model.index(root_path))
+                self.setWindowTitle(f"ORCA Project Manager - {Path(root_path).name}")
+
+        except Exception as e:
+            print(f"[WARN] Failed to load state: {e}")
 
     def on_queue_context_menu(self, position):
         item = self.queue_list.itemAt(position)
@@ -179,13 +284,16 @@ class OrcaGUI(QMainWindow):
 
         path = self.model.filePath(index)
         p = Path(path)
-        if not (p.is_file() and p.suffix == '.inp'):
-            return
 
         menu = QMenu(self)
-        action = menu.addAction("➕ Add to Queue")
-        action.triggered.connect(lambda: self.add_inp_to_queue(p))
-        menu.exec(self.tree.viewport().mapToGlobal(position))
+
+        if p.is_file() and p.suffix == '.inp':
+            menu.addAction("➕ Add to Queue", lambda: self.add_inp_to_queue(p))
+        elif p.is_file() and p.suffix == '.json':
+            menu.addAction("📥 Add Pipeline to Queue", lambda: self.load_pipeline(p))
+
+        if not menu.isEmpty():
+            menu.exec(self.tree.viewport().mapToGlobal(position))
 
     def remove_queue_item(self, item):
         row = self.queue_list.row(item)
@@ -208,16 +316,13 @@ class OrcaGUI(QMainWindow):
             folder_path = Path(folder)
             self.model.setRootPath(str(folder_path))
             self.tree.setRootIndex(self.model.index(str(folder_path)))
-            self.setWindowTitle(f"ORCA Project Manager")
-        else:
-            # Если пользователь отменил — завершить или оставить пустым
-            if self.tree.model().rowCount(self.tree.rootIndex()) == 0:
-                # Можно выйти, если не выбрана папка
-                pass
+            self.setWindowTitle(f"ORCA Project Manager - {folder_path.name}")
+            # Сохраняем состояние после выбора
+            self.save_state()
 
     def on_file_double_clicked(self, index: QModelIndex):
         path = self.model.filePath(index)
-        if Path(path).is_file() and path.endswith(('.inp', '.out', '.txt', '.log')):
+        if Path(path).is_file() and path.endswith(('.inp', '.out', '.txt', '.log', '.json', '.xyz')):
             try:
                 with open(path, 'r', encoding='utf-8', errors='replace') as f:
                     content = f.read()
@@ -324,6 +429,77 @@ class OrcaGUI(QMainWindow):
                 f.write(content)
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save file:\n{e}")
+
+    def closeEvent(self, event):
+        self.save_state()
+        event.accept()
+
+    def create_pipeline(self):
+        if not self.queue._jobs:
+            QMessageBox.warning(self, "Empty Queue", "Queue is empty. Nothing to save.")
+            return
+
+        # Определяем папку: родитель последнего .inp
+        last_inp = self.queue._jobs[-1]['inp']
+        pipeline_dir = last_inp.parent
+
+        dialog = PipelineDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            name = dialog.get_name()
+            if not name:
+                QMessageBox.warning(self, "Invalid Name", "Pipeline name cannot be empty.")
+                return
+
+            # Формируем имя файла: name.json
+            pipeline_path = pipeline_dir / f"{name}.json"
+
+            # Сохраняем данные
+            pipeline_data = []
+            for job in self.queue._jobs:
+                pipeline_data.append({
+                    "inp": str(job['inp']),
+                    "display_name": job['display_name']
+                })
+
+            try:
+                with open(pipeline_path, 'w', encoding='utf-8') as f:
+                    json.dump(pipeline_data, f, indent=2, ensure_ascii=False)
+                QMessageBox.information(self, "Success", f"Pipeline saved to:\n{pipeline_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save pipeline:\n{e}")
+
+    def load_pipeline(self, json_path: Path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                pipeline_data = json.load(f)
+
+            if not isinstance(pipeline_data, list):
+                raise ValueError("Invalid pipeline format")
+
+            added = 0
+            for item in pipeline_data:
+                inp_path = Path(item.get("inp", ""))
+                if not inp_path.is_file():
+                    continue
+
+                out_path = inp_path.parent / ".." / "Results" / (inp_path.stem + ".out")
+                out_path = out_path.resolve()
+
+                # Добавляем в очередь
+                self.queue.add_job(inp_path, out_path)
+                display_name = item.get("display_name", inp_path.name)
+                list_item = QListWidgetItem(f"⏹️ {display_name}")
+                list_item.setData(Qt.UserRole, str(inp_path))
+                list_item.setData(Qt.UserRole + 1, display_name)
+                self.queue_list.addItem(list_item)
+                added += 1
+
+            QMessageBox.information(self, "Pipeline Loaded", f"Added {added} jobs to queue.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load pipeline:\n{e}")
+
+    
 
 def main():
     app = QApplication(sys.argv)
