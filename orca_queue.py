@@ -1,4 +1,5 @@
 # orca_queue.py
+import datetime
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 import orca_job
@@ -10,19 +11,31 @@ class OrcaQueue(QObject):
     queue_finished = Signal()
     error_occurred = Signal(str, str)
 
-    def __init__(self, orca_exe: Path):
+    def __init__(self, orca_exe: Path, log_dir: Path = None):
         super().__init__()
         self.orca_exe = orca_exe
         self._jobs = []
         self._current_index = -1
-        self._active_jobs = []  # ← храним ссылки на активные задачи
+        self._active_jobs = []
+        self._log_dir = log_dir or Path(__file__).parent.parent / "logs"
+        self._log_dir.mkdir(exist_ok=True)
+        self._log_file = None
 
     def add_job(self, inp_path: Path, out_path: Path):
         if self._current_index >= 0:
             raise RuntimeError("Cannot add job after queue started")
+        try:
+            parent2 = inp_path.parent.parent.name
+            if not parent2:
+                parent2 = inp_path.parent.name
+        except Exception:
+            parent2 = "root"
+        display_name = f"{parent2} : {inp_path.name}"
         self._jobs.append({
-            'inp': Path(inp_path),
-            'out': Path(out_path),
+            'inp': inp_path,
+            'out': out_path,
+            'display_name': display_name,
+            'status': '⏹️ Pending'
         })
 
     def remove_job(self, index: int):
@@ -39,10 +52,25 @@ class OrcaQueue(QObject):
     def is_empty(self) -> bool:
         return len(self._jobs) == 0
 
+    def _write_log(self):
+        if not self._log_file:
+            return
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(self._log_file, 'a', encoding='utf-8') as f:
+            f.write(f"[{now}] Queue state:\n")
+            for job in self._jobs:
+                f.write(f"{job['display_name']} → {job['status']}\n")
+            f.write("\n")
+
     def start(self):
         if not self._jobs:
             self.queue_finished.emit()
             return
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._log_file = self._log_dir / f"{timestamp}.log"
+        for job in self._jobs:
+            job['status'] = '⏹️ Pending'
+        self._write_log()
         self._current_index = 0
         self._active_jobs.clear()
         self._run_next_job()
@@ -50,24 +78,27 @@ class OrcaQueue(QObject):
     def _run_next_job(self):
         if self._current_index >= len(self._jobs):
             self._current_index = -1
+            self._log_file = None
             self.queue_finished.emit()
             return
 
         job_info = self._jobs[self._current_index]
+        job_info['status'] = '▶️ Running'
+        self._write_log()
+
         job = orca_job.OrcaJob(
             self.orca_exe,
             job_info['inp'],
             job_info['out']
         )
 
-        # Сохраняем ссылку
         self._active_jobs.append(job)
 
-        # Подключаем все сигналы
+        # Передаём сигналы дальше
         job.started.connect(self.job_started)
         job.finished.connect(self._on_job_finished)
         job.error_occurred.connect(self._on_job_error)
-        job.completed.connect(lambda: self._cleanup_job(job))  # ← удаляем из списка
+        job.completed.connect(lambda: self._cleanup_job(job))
 
         job.start_async()
 
@@ -76,14 +107,28 @@ class OrcaQueue(QObject):
             self._active_jobs.remove(job)
 
     def _on_job_finished(self, inp_name: str, success: bool, out_path: str):
-        self.job_finished.emit(inp_name, success, out_path)
-        # Удаляем завершённую задачу из активных
-        self._active_jobs[:] = [j for j in self._active_jobs if not hasattr(j, '_finished')]
-        # Но лучше — просто очищать после перехода
+        """Обработка завершения — только логика, без UI."""
+        if 0 <= self._current_index < len(self._jobs):
+            status = '✅ Success' if success else '❌ Failed'
+            self._jobs[self._current_index]['status'] = status
+            self._write_log()
         self._current_index += 1
         self._run_next_job()
 
     def _on_job_error(self, inp_name: str, error: str):
-        self.error_occurred.emit(inp_name, error)
+        """Обработка ошибки — только логика."""
+        if 0 <= self._current_index < len(self._jobs):
+            self._jobs[self._current_index]['status'] = '⚠️ Error'
+            self._write_log()
         self._current_index += 1
         self._run_next_job()
+
+    def terminate_current_job(self):
+        if self._active_jobs:
+            job = self._active_jobs[0]
+            job.terminate()
+
+    def get_display_name(self, index: int) -> str:
+        if 0 <= index < len(self._jobs):
+            return self._jobs[index]['display_name']
+        return ""

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QAbstractItemView
 ) 
 from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtCore import Qt, QModelIndex, QMimeData, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 import orca_queue
@@ -50,7 +50,8 @@ class OrcaGUI(QMainWindow):
 
         # Путь к ORCA (временно хардкод)
         self.orca_exe = Path(r"F:\Modelling\ORCA\orca.exe")
-        self.queue = orca_queue.OrcaQueue(self.orca_exe)
+        app_dir = Path(__file__).parent
+        self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
 
         # === Menu Bar ===
         menubar = self.menuBar()
@@ -59,9 +60,17 @@ class OrcaGUI(QMainWindow):
         open_folder_action.setShortcut("Ctrl+O")
         open_folder_action.triggered.connect(self.open_folder)
 
+        save_action = file_menu.addAction("Save")
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_current_file)
+
         # === File System Model ===
         self.model = QFileSystemModel()
-        self.model.setRootPath("")  # временно
+        self.model.setRootPath("")
+
+        # Фильтрация: показывать ТОЛЬКО указанные типы файлов
+        self.model.setNameFilters(["*.inp", "*.out", "*trj.xyz"])
+        self.model.setNameFilterDisables(False)  # ← критически важно!
 
         # === Tree View ===
         self.tree = QTreeView()
@@ -149,7 +158,7 @@ class OrcaGUI(QMainWindow):
 
         self.queue_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.queue_list.customContextMenuRequested.connect(self.on_queue_context_menu)
-        
+        self._manually_stopped = False
 
         self.open_folder()
 
@@ -190,20 +199,10 @@ class OrcaGUI(QMainWindow):
         if 0 <= index < len(self._jobs):
             del self._jobs[index]
 
-    def remove_queue_item(self, item):
-        if self.queue._current_index >= 0:
-            QMessageBox.warning(self, "Running", "Cannot remove job while queue is running.")
-            return
-        row = self.queue_list.row(item)
-        self.queue_list.takeItem(row)
-        self.queue.remove_job(row)
 
     def open_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select Project Folder",
-            str(Path.home()),  # начальная директория
-            QFileDialog.ShowDirsOnly
+            self, "Select Project Folder", str(Path.home()), QFileDialog.ShowDirsOnly
         )
         if folder:
             folder_path = Path(folder)
@@ -250,8 +249,10 @@ class OrcaGUI(QMainWindow):
         out_path = out_path.resolve()
         self.queue.add_job(inp_path, out_path)
 
-        item = QListWidgetItem(f"⏹️ {inp_path.name}")
+        display_name = self.queue.get_display_name(len(self.queue._jobs) - 1)
+        item = QListWidgetItem(f"⏹️ {display_name}")
         item.setData(Qt.UserRole, str(inp_path))
+        item.setData(Qt.UserRole + 1, display_name)  # ← сохраняем display_name
         item.setToolTip(str(inp_path))
         self.queue_list.addItem(item)
 
@@ -265,38 +266,52 @@ class OrcaGUI(QMainWindow):
         self.queue.start()
 
     # === Обновление статусов в очереди ===
-    def _update_queue_item_status(self, inp_name: str, status_emoji: str):
+    def _update_queue_item_status(self, display_name: str, status_emoji: str):
         for i in range(self.queue_list.count()):
             item = self.queue_list.item(i)
-            if item.text().endswith(inp_name):
-                base_name = inp_name
-                item.setText(f"{status_emoji} {base_name}")
-                break
+            stored_name = item.data(Qt.UserRole + 1)
+            if stored_name == display_name:
+                item.setText(f"{status_emoji} {display_name}")
+                return
 
     def on_job_started(self, inp_name: str):
-        self._update_queue_item_status(inp_name, "▶️")
+        idx = self.queue._current_index
+        if 0 <= idx < len(self.queue._jobs):
+            display_name = self.queue._jobs[idx]['display_name']
+            self._update_queue_item_status(display_name, "▶️")
 
     def on_job_finished(self, inp_name: str, success: bool, out_path: str):
-        emoji = "✅" if success else "❌"
-        self._update_queue_item_status(inp_name, emoji)
+        idx = self.queue._current_index - 1
+        if idx >= 0 and idx < len(self.queue._jobs):
+            display_name = self.queue._jobs[idx]['display_name']
+            emoji = "✅" if success else "❌"
+            self._update_queue_item_status(display_name, emoji)
 
     def on_job_error(self, inp_name: str, error: str):
-        self._update_queue_item_status(inp_name, "⚠️")
+        idx = self.queue._current_index - 1
+        if 0 <= idx < len(self.queue._jobs):
+            display_name = self.queue._jobs[idx]['display_name']
+            self._update_queue_item_status(display_name, "⚠️")
 
     def on_queue_finished(self):
+        if not self._manually_stopped:
+            QMessageBox.information(self, "Queue done", "All calculations completed.")
+        else:
+            self._manually_stopped = False  # сброс
         self._on_queue_stopped()
-        QMessageBox.information(self, "Queue done", "All calculations completed.")
     
     def stop_queue(self):
+        self._manually_stopped = True
         self.queue.terminate_current_job()
-        # Отключаем очередь
+        if self.queue._current_index >= 0 and self.queue._current_index < len(self.queue._jobs):
+            self.queue._jobs[self.queue._current_index]['status'] = '⏹️ Stopped'
+            self.queue._write_log()
         self._on_queue_stopped()
 
     def _on_queue_stopped(self):
         self.start_queue_btn.setEnabled(True)
         self.stop_queue_btn.setEnabled(False)
         self.clear_queue_btn.setEnabled(True)
-        QMessageBox.information(self, "Stopped", "Calculation stopped. Output saved.")
 
     def clear_queue(self):
         if self.queue._current_index >= 0:
@@ -305,6 +320,15 @@ class OrcaGUI(QMainWindow):
         self.queue_list.clear()
         self.queue.clear()
 
+    def save_current_file(self):
+        if not self.current_file:
+            return
+        try:
+            content = self.editor.toPlainText()
+            with open(self.current_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save file:\n{e}")
 
 def main():
     app = QApplication(sys.argv)
