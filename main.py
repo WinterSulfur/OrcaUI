@@ -1,5 +1,6 @@
 # main.py
 import sys
+import subprocess
 import json
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -12,7 +13,10 @@ from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu
 from PySide6.QtGui import QFont, QKeySequence, QShortcut, QIcon
 from PySide6.QtCore import Qt, QModelIndex, QMimeData, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+import settings
 import orca_queue
+import find_dialog
 
 
 class QueueListWidget(QListWidget):
@@ -78,7 +82,11 @@ class OrcaGUI(QMainWindow):
 
         # === Paths and core data ===
         app_dir = Path(__file__).parent
+        self.state_file = app_dir / "state.json"
+        self.settings_file = app_dir / "settings.json"
+        self.load_settings()
         self.orca_exe = Path(r"F:\Modelling\ORCA\orca.exe")
+        self.chemcraft_exe = Path(r"F:\Modelling\Chemcraft\Chemcraft.exe")
         self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
         self._manually_stopped = False
         self.current_file = None
@@ -91,6 +99,9 @@ class OrcaGUI(QMainWindow):
         # === Menu bar ===
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
+        settings_menu = menubar.addMenu("Settings")
+        settings_action = settings_menu.addAction("Preferences...")
+        settings_action.triggered.connect(self.open_settings)
         open_folder_action = file_menu.addAction("Open Folder...")
         open_folder_action.setShortcut("Ctrl+O")
         open_folder_action.triggered.connect(self.open_folder)
@@ -152,22 +163,24 @@ class OrcaGUI(QMainWindow):
         self.clear_queue_btn.clicked.connect(self.clear_queue)
         self.stop_queue_btn.setEnabled(False)
 
-        queue_button_layout = QHBoxLayout()
-        queue_button_layout.addWidget(self.start_queue_btn)
-        queue_button_layout.addWidget(self.stop_queue_btn)
-        queue_button_layout.addWidget(self.clear_queue_btn)
+        queue_main_buttons_layout = QHBoxLayout()
+        queue_main_buttons_layout.addWidget(self.start_queue_btn)
+        queue_main_buttons_layout.addWidget(self.stop_queue_btn)
+        queue_main_buttons_layout.addWidget(self.clear_queue_btn)
 
+        queue_main_buttons_container = QWidget()
+        queue_main_buttons_container.setLayout(queue_main_buttons_layout)
+
+        # === Кнопка Create Pipeline (отдельно снизу) ===
         self.create_pipeline_btn = QPushButton("📦 Create Pipeline")
         self.create_pipeline_btn.clicked.connect(self.create_pipeline)
-        queue_button_layout.addWidget(self.create_pipeline_btn)
-
-        queue_button_container = QWidget()
-        queue_button_container.setLayout(queue_button_layout)
 
         # === Right panel: queue list + buttons ===
         queue_layout = QVBoxLayout()
         queue_layout.addWidget(self.queue_list)
-        queue_layout.addWidget(queue_button_container)
+        queue_layout.addWidget(queue_main_buttons_container)
+        queue_layout.addWidget(self.create_pipeline_btn)  # ← теперь снизу
+
         queue_container = QWidget()
         queue_container.setLayout(queue_layout)
 
@@ -191,9 +204,14 @@ class OrcaGUI(QMainWindow):
         self.queue.error_occurred.connect(self.on_job_error)
         self.queue.queue_finished.connect(self.on_queue_finished)
 
+        self.find_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.find_shortcut.activated.connect(self.show_find_dialog)
+
+        self.find_dialog = None  # кэш диалога
+
         # === Open initial folder ===
-        self.state_file = app_dir / "state.json"
         self.load_state()
+        
 
     def save_state(self):
         """Сохраняет текущее состояние в state.json."""
@@ -287,10 +305,17 @@ class OrcaGUI(QMainWindow):
 
         menu = QMenu(self)
 
+        # Для .inp — добавление в очередь
         if p.is_file() and p.suffix == '.inp':
             menu.addAction("➕ Add to Queue", lambda: self.add_inp_to_queue(p))
+
+        # Для .json — загрузка pipeline
         elif p.is_file() and p.suffix == '.json':
             menu.addAction("📥 Add Pipeline to Queue", lambda: self.load_pipeline(p))
+
+        # Для ЛЮБОГО файла — открытие в Chemcraft (если поддерживается)
+        if p.is_file():
+            menu.addAction("🔬 Open in Chemcraft", lambda: self.open_in_chemcraft(p))
 
         if not menu.isEmpty():
             menu.exec(self.tree.viewport().mapToGlobal(position))
@@ -498,6 +523,63 @@ class OrcaGUI(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load pipeline:\n{e}")
+
+    def open_in_chemcraft(self, file_path: Path):
+        if not self.chemcraft_exe.is_file():
+            QMessageBox.critical(self, "Error", f"Chemcraft not found:\n{self.chemcraft_exe}")
+            return
+
+        if not file_path.is_file():
+            return
+
+        try:
+            # Запускаем Chemcraft с файлом
+            subprocess.Popen([str(self.chemcraft_exe), str(file_path)])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open in Chemcraft:\n{e}")
+    
+    def save_settings(self):
+        settings = {
+            "orca_exe": str(self.orca_exe),
+            "chemcraft_exe": str(self.chemcraft_exe)
+        }
+        try:
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[WARN] Failed to save settings: {e}")
+
+    def load_settings(self):
+        if not self.settings_file.is_file():
+            return
+
+        try:
+            with open(self.settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            self.orca_exe = Path(settings.get("orca_exe", r"F:\Modelling\ORCA\orca.exe"))
+            self.chemcraft_exe = Path(settings.get("chemcraft_exe", r"F:\Modelling\Chemcraft\Chemcraft.exe"))
+        except Exception as e:
+            print(f"[WARN] Failed to load settings: {e}")
+
+    def open_settings(self):
+        dialog = settings.SettingsDialog(
+            str(self.orca_exe),
+            str(self.chemcraft_exe),
+            self
+        )
+        if dialog.exec() == QDialog.Accepted:
+            self.orca_exe = Path(dialog.get_orca_path())
+            self.chemcraft_exe = Path(dialog.get_chemcraft_path())
+            self.save_settings()
+            QMessageBox.information(self, "Success", "Settings saved.")
+
+    def show_find_dialog(self):
+        if self.find_dialog is None:
+            self.find_dialog = find_dialog.FindDialog(self.editor, self)
+        self.find_dialog.search_input.setText(self.editor.textCursor().selectedText())
+        self.find_dialog.show()
+        self.find_dialog.raise_()
+        self.find_dialog.activateWindow()
 
     
 
