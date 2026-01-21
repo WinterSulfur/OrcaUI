@@ -7,9 +7,9 @@ import orca_job
 
 class OrcaQueue(QObject):
     job_started = Signal(str)
-    job_finished = Signal(str, bool, str)
+    job_finished = Signal(str, bool, str, str)  # inp_name, success, out_path, display_name
+    error_occurred = Signal(str, str, str)      # inp_name, error, display_name
     queue_finished = Signal()
-    error_occurred = Signal(str, str)
 
     def __init__(self, orca_exe: Path, log_dir: Path = None):
         super().__init__()
@@ -20,6 +20,7 @@ class OrcaQueue(QObject):
         self._log_dir = log_dir or Path(__file__).parent.parent / "logs"
         self._log_dir.mkdir(exist_ok=True)
         self._log_file = None
+        self._stopped = False  # ← новый флаг
 
     def add_job(self, inp_path: Path, out_path: Path):
         if self._current_index >= 0:
@@ -76,6 +77,12 @@ class OrcaQueue(QObject):
         self._run_next_job()
 
     def _run_next_job(self):
+        if self._stopped:
+            self._current_index = -1
+            self._log_file = None
+            self.queue_finished.emit()
+            return
+
         if self._current_index >= len(self._jobs):
             self._current_index = -1
             self._log_file = None
@@ -107,23 +114,29 @@ class OrcaQueue(QObject):
             self._active_jobs.remove(job)
 
     def _on_job_finished(self, inp_name: str, success: bool, out_path: str):
-        """Обработка завершения — только логика, без UI."""
         if 0 <= self._current_index < len(self._jobs):
             status = '✅ Success' if success else '❌ Failed'
-            self._jobs[self._current_index]['status'] = status
+            job = self._jobs[self._current_index]
+            job['status'] = status
+            display_name = job['display_name']  # ← сохраняем здесь
             self._write_log()
+            # Эмитим сигнал с display_name
+            self.job_finished.emit(inp_name, success, out_path, display_name)
         self._current_index += 1
         self._run_next_job()
 
     def _on_job_error(self, inp_name: str, error: str):
-        """Обработка ошибки — только логика."""
         if 0 <= self._current_index < len(self._jobs):
-            self._jobs[self._current_index]['status'] = '⚠️ Error'
+            job = self._jobs[self._current_index]
+            job['status'] = '⚠️ Error'
+            display_name = job['display_name']
             self._write_log()
+            self.error_occurred.emit(inp_name, error, display_name)
         self._current_index += 1
         self._run_next_job()
 
     def terminate_current_job(self):
+        self._stopped = True  # ← помечаем, что очередь остановлена
         if self._active_jobs:
             job = self._active_jobs[0]
             job.terminate()

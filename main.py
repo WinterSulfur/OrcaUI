@@ -5,10 +5,10 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QSplitter, QTreeView,
     QFileSystemModel, QPlainTextEdit, QWidget, QVBoxLayout,
     QPushButton, QListWidget, QListWidgetItem, QHBoxLayout,
-    QMessageBox, QAbstractItemView
+    QMessageBox, QAbstractItemView, QLabel, QLineEdit
 ) 
 from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu
-from PySide6.QtGui import QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QFont, QKeySequence, QShortcut, QIcon
 from PySide6.QtCore import Qt, QModelIndex, QMimeData, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 import orca_queue
@@ -48,12 +48,19 @@ class OrcaGUI(QMainWindow):
         self.setWindowTitle("ORCA Project Manager")
         self.resize(1400, 800)
 
-        # Путь к ORCA (временно хардкод)
-        self.orca_exe = Path(r"F:\Modelling\ORCA\orca.exe")
+        # === Paths and core data ===
         app_dir = Path(__file__).parent
+        self.orca_exe = Path(r"F:\Modelling\ORCA\orca.exe")
         self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
+        self._manually_stopped = False
+        self.current_file = None
 
-        # === Menu Bar ===
+        # === Window icon ===
+        icon_path = app_dir / "Picture.png"
+        if icon_path.is_file():
+            self.setWindowIcon(QIcon(str(icon_path)))
+
+        # === Menu bar ===
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
         open_folder_action = file_menu.addAction("Open Folder...")
@@ -64,18 +71,16 @@ class OrcaGUI(QMainWindow):
         save_action.setShortcut("Ctrl+S")
         save_action.triggered.connect(self.save_current_file)
 
-        # === File System Model ===
+        # === File system model ===
         self.model = QFileSystemModel()
         self.model.setRootPath("")
-
-        # Фильтрация: показывать ТОЛЬКО указанные типы файлов
         self.model.setNameFilters(["*.inp", "*.out", "*trj.xyz"])
-        self.model.setNameFilterDisables(False)  # ← критически важно!
+        self.model.setNameFilterDisables(False)
 
-        # === Tree View ===
+        # === File tree (left panel) ===
         self.tree = QTreeView()
         self.tree.setModel(self.model)
-        self.tree.setRootIndex(self.model.index(""))  # будет обновлено
+        self.tree.setRootIndex(self.model.index(""))
         self.tree.setAnimated(False)
         self.tree.setIndentation(20)
         self.tree.setSortingEnabled(True)
@@ -84,21 +89,32 @@ class OrcaGUI(QMainWindow):
         self.tree.setColumnWidth(0, 250)
         self.tree.setHeaderHidden(True)
         self.tree.setRootIsDecorated(True)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.on_tree_context_menu)
 
-
-        # === Text Editor ===
+        # === Text editor components ===
         self.editor = QPlainTextEdit()
         font = QFont("Consolas")
         font.setPointSize(11)
         self.editor.setFont(font)
-        self.editor.setStyleSheet("font-size: 11pt;")
-        self.current_file = None
 
-        # === Queue Panel ===
+        self.file_path_label = QLabel("No file opened")
+        self.file_path_label.setStyleSheet("font-size: 9pt; color: #666;")
+
+        # === Central area: label + editor + search ===
+        editor_layout = QVBoxLayout()
+        editor_layout.addWidget(self.file_path_label)
+        editor_layout.addWidget(self.editor)
+        editor_container = QWidget()
+        editor_container.setLayout(editor_layout)
+
+        # === Queue list (right panel) ===
         self.queue_list = QueueListWidget(self)
         self.queue_list.setFixedWidth(300)
+        self.queue_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.queue_list.customContextMenuRequested.connect(self.on_queue_context_menu)
 
-        # Кнопки управления очередью
+        # === Queue control buttons ===
         self.start_queue_btn = QPushButton("▶ Start Queue")
         self.stop_queue_btn = QPushButton("⏹ Stop Queue")
         self.clear_queue_btn = QPushButton("🗑 Clear Queue")
@@ -106,11 +122,8 @@ class OrcaGUI(QMainWindow):
         self.start_queue_btn.clicked.connect(self.start_queue)
         self.stop_queue_btn.clicked.connect(self.stop_queue)
         self.clear_queue_btn.clicked.connect(self.clear_queue)
-
-        # Изначально Stop недоступна
         self.stop_queue_btn.setEnabled(False)
 
-        # Горизонтальный layout для кнопок
         queue_button_layout = QHBoxLayout()
         queue_button_layout.addWidget(self.start_queue_btn)
         queue_button_layout.addWidget(self.stop_queue_btn)
@@ -119,47 +132,34 @@ class OrcaGUI(QMainWindow):
         queue_button_container = QWidget()
         queue_button_container.setLayout(queue_button_layout)
 
-        # Вертикальный layout: список + кнопки
+        # === Right panel: queue list + buttons ===
         queue_layout = QVBoxLayout()
         queue_layout.addWidget(self.queue_list)
         queue_layout.addWidget(queue_button_container)
-
         queue_container = QWidget()
         queue_container.setLayout(queue_layout)
 
-        # === Central Layout ===
-        central_splitter = QSplitter(Qt.Horizontal)
-        central_splitter.addWidget(self.editor)
-        central_splitter.addWidget(queue_container)
-        central_splitter.setSizes([700, 300])
+        # === Center splitter: editor + queue ===
+        center_splitter = QSplitter(Qt.Horizontal)
+        center_splitter.addWidget(editor_container)
+        center_splitter.addWidget(queue_container)
+        center_splitter.setSizes([700, 300])
 
-        central_layout = QVBoxLayout()
-        central_layout.addWidget(central_splitter)
-
-        central_widget = QWidget()
-        central_widget.setLayout(central_layout)
-
-        # === Main Splitter ===
+        # === Main layout: file tree + center ===
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(self.tree)
-        main_splitter.addWidget(central_widget)
+        main_splitter.addWidget(center_splitter)
         main_splitter.setSizes([300, 1100])
 
         self.setCentralWidget(main_splitter)
-        
-        # === Подключаем сигналы очереди ===
+
+        # === Connect queue signals ===
         self.queue.job_started.connect(self.on_job_started)
         self.queue.job_finished.connect(self.on_job_finished)
         self.queue.error_occurred.connect(self.on_job_error)
         self.queue.queue_finished.connect(self.on_queue_finished)
 
-        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self.on_tree_context_menu) 
-
-        self.queue_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.queue_list.customContextMenuRequested.connect(self.on_queue_context_menu)
-        self._manually_stopped = False
-
+        # === Open initial folder ===
         self.open_folder()
 
     def on_queue_context_menu(self, position):
@@ -208,7 +208,7 @@ class OrcaGUI(QMainWindow):
             folder_path = Path(folder)
             self.model.setRootPath(str(folder_path))
             self.tree.setRootIndex(self.model.index(str(folder_path)))
-            self.setWindowTitle(f"ORCA Project Manager - {folder_path.name}")
+            self.setWindowTitle(f"ORCA Project Manager")
         else:
             # Если пользователь отменил — завершить или оставить пустым
             if self.tree.model().rowCount(self.tree.rootIndex()) == 0:
@@ -223,7 +223,7 @@ class OrcaGUI(QMainWindow):
                     content = f.read()
                 self.editor.setPlainText(content)
                 self.current_file = path
-                self.setWindowTitle(f"ORCA Project Manager - {path}")
+                self.file_path_label.setText(path)  # ← обновляем метку
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to open file:\n{e}")
 
@@ -252,7 +252,7 @@ class OrcaGUI(QMainWindow):
         display_name = self.queue.get_display_name(len(self.queue._jobs) - 1)
         item = QListWidgetItem(f"⏹️ {display_name}")
         item.setData(Qt.UserRole, str(inp_path))
-        item.setData(Qt.UserRole + 1, display_name)  # ← сохраняем display_name
+        item.setData(Qt.UserRole + 1, display_name)
         item.setToolTip(str(inp_path))
         self.queue_list.addItem(item)
 
@@ -267,12 +267,13 @@ class OrcaGUI(QMainWindow):
 
     # === Обновление статусов в очереди ===
     def _update_queue_item_status(self, display_name: str, status_emoji: str):
+        found = False
         for i in range(self.queue_list.count()):
             item = self.queue_list.item(i)
             stored_name = item.data(Qt.UserRole + 1)
             if stored_name == display_name:
                 item.setText(f"{status_emoji} {display_name}")
-                return
+                break
 
     def on_job_started(self, inp_name: str):
         idx = self.queue._current_index
@@ -280,18 +281,12 @@ class OrcaGUI(QMainWindow):
             display_name = self.queue._jobs[idx]['display_name']
             self._update_queue_item_status(display_name, "▶️")
 
-    def on_job_finished(self, inp_name: str, success: bool, out_path: str):
-        idx = self.queue._current_index - 1
-        if idx >= 0 and idx < len(self.queue._jobs):
-            display_name = self.queue._jobs[idx]['display_name']
-            emoji = "✅" if success else "❌"
-            self._update_queue_item_status(display_name, emoji)
+    def on_job_finished(self, inp_name: str, success: bool, out_path: str, display_name: str):
+        emoji = "✅" if success else "❌"
+        self._update_queue_item_status(display_name, emoji)
 
-    def on_job_error(self, inp_name: str, error: str):
-        idx = self.queue._current_index - 1
-        if 0 <= idx < len(self.queue._jobs):
-            display_name = self.queue._jobs[idx]['display_name']
-            self._update_queue_item_status(display_name, "⚠️")
+    def on_job_error(self, inp_name: str, error: str, display_name: str):
+        self._update_queue_item_status(display_name, "⚠️")
 
     def on_queue_finished(self):
         if not self._manually_stopped:
