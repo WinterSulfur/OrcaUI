@@ -1,10 +1,14 @@
 {
-  "root_path": "F:/NewModelling/test_program",
+  "root_path": null,
   "current_file": "F:/NewModelling/test_program/Results/opt.out",
   "queue": [
     {
-      "inp": "F:\\NewModelling\\test_program\\Calculations\\opt.inp",
-      "display_name": "test_program : opt.inp"
+      "inp": "F:\\Modelling\\Template2 New\\Calculations\\opt_reag.inp",
+      "display_name": "Template2 New : opt_reag.inp"
+    },
+    {
+      "inp": "F:\\Modelling\\Template2 New\\Calculations\\opt_prod.inp",
+      "display_name": "Template2 New : opt_prod.inp"
     }
   ]
 }

@@ -1,4 +1,3 @@
-# main.py
 import sys
 import subprocess
 import json
@@ -87,7 +86,7 @@ class OrcaGUI(QMainWindow):
         self.load_settings()
         self.orca_exe = Path(r"F:\Modelling\ORCA\orca.exe")
         self.chemcraft_exe = Path(r"F:\Modelling\Chemcraft\Chemcraft.exe")
-        self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
+        self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs", gui=self)
         self._manually_stopped = False
         self.current_file = None
 
@@ -419,10 +418,13 @@ class OrcaGUI(QMainWindow):
         self._update_queue_item_status(display_name, "⚠️")
 
     def on_queue_finished(self):
+        # === Восстанавливаем модель ===
+        self.restore_filesystem_model()
+        
         if not self._manually_stopped:
             QMessageBox.information(self, "Queue done", "All calculations completed.")
         else:
-            self._manually_stopped = False  # сброс
+            self._manually_stopped = False
         self._on_queue_stopped()
     
     def stop_queue(self):
@@ -580,6 +582,16 @@ class OrcaGUI(QMainWindow):
         self.find_dialog.show()
         self.find_dialog.raise_()
         self.find_dialog.activateWindow()
+
+    def release_filesystem_model(self):
+        """Освобождает дескрипторы файловой системы перед запуском ORCA."""
+        self._saved_root_path = self.model.rootPath()
+        self.model.setRootPath("")
+
+    def restore_filesystem_model(self):
+        """Восстанавливает файловую модель после завершения ORCA."""
+        if hasattr(self, '_saved_root_path') and self._saved_root_path:
+            self.model.setRootPath(self._saved_root_path)
 
     
 

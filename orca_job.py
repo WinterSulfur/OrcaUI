@@ -89,8 +89,8 @@ exit /b %errorlevel%
             except subprocess.TimeoutExpired:
                 self._proc.kill()
                 self._proc.wait()
-        self._cleanup()
-        self.completed.emit()
+        self._proc = None
+        self.completed.emit()  # ← только это
 
     def start_async(self):
         self._thread = QThread()
