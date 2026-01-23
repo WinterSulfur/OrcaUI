@@ -16,7 +16,6 @@ class OrcaJob(QObject):
         self.inp_path = inp_path
         self.out_path = out_path
         self._proc = None
-        self._temp_bat = None
 
     def run(self):
         try:
@@ -31,28 +30,50 @@ class OrcaJob(QObject):
             calc_dir = str(self.inp_path.parent)
             self.out_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Создаём .bat файл
-            self._temp_bat = self.inp_path.with_suffix('.run_orca.bat')
-            bat_content = f'''@echo off
-cd /d "{calc_dir}"
-"{self.orca_exe}" "{inp_name}" > "{self.out_path}" 2>&1
-exit /b %errorlevel%
-'''
-            with open(self._temp_bat, 'w', encoding='utf-8') as f:
-                f.write(bat_content)
+            # Путь к mpiexec
+            mpiexec_path = Path("C:/Program Files/Microsoft MPI/Bin/mpiexec.exe")
+            if not mpiexec_path.is_file():
+                mpiexec_path = Path("C:/Program Files (x86)/Microsoft MPI/Bin/mpiexec.exe")
+            if not mpiexec_path.is_file():
+                raise FileNotFoundError("mpiexec.exe not found")
 
-            # Запускаем .bat
+            # Чистое окружение
+            env = os.environ.copy()
+            env.pop('PYTHONPATH', None)
+            env.pop('PYTHONHOME', None)
+
+            # Команда с mpiexec
+            cmd = [
+                str(mpiexec_path),
+                "-n", "8",
+                str(self.orca_exe),
+                inp_name
+            ]
+
             self._proc = subprocess.Popen(
-                [str(self._temp_bat)],
+                cmd,
                 cwd=calc_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                env=env,
+                close_fds=True
             )
-            returncode = self._proc.wait()
 
-            # Анализируем результат
+            # Потоковая запись
+            with open(self.out_path, 'w', encoding='utf-8') as f_out:
+                while True:
+                    line = self._proc.stdout.readline()
+                    if not line and self._proc.poll() is not None:
+                        break
+                    if line:
+                        f_out.write(line)
+                        f_out.flush()
+
+            returncode = self._proc.wait()
             success = False
-            output = ""
             if self.out_path.is_file():
                 with open(self.out_path, 'r', encoding='utf-8', errors='replace') as f:
                     output = f.read()
@@ -65,21 +86,12 @@ exit /b %errorlevel%
             self.error_occurred.emit(self.inp_path.name, err_msg)
             self._save_output(f"[FAILED]\n{err_msg}\n")
         finally:
-            self._cleanup()
             self.completed.emit()
 
     def _save_output(self, output: str):
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.out_path, 'w', encoding='utf-8') as f:
             f.write(output)
-
-    def _cleanup(self):
-        """Удаляет временные файлы."""
-        if self._temp_bat and self._temp_bat.is_file():
-            try:
-                self._temp_bat.unlink()
-            except:
-                pass
 
     def terminate(self):
         if self._proc and self._proc.poll() is None:
@@ -89,7 +101,6 @@ exit /b %errorlevel%
             except subprocess.TimeoutExpired:
                 self._proc.kill()
                 self._proc.wait()
-        self._cleanup()
         self.completed.emit()
 
     def start_async(self):

@@ -11,7 +11,7 @@ class OrcaQueue(QObject):
     error_occurred = Signal(str, str, str)      # inp_name, error, display_name
     queue_finished = Signal()
 
-    def __init__(self, orca_exe: Path, log_dir: Path = None):
+    def __init__(self, orca_exe: Path, log_dir: Path = None, gui=None):
         super().__init__()
         self.orca_exe = orca_exe
         self._jobs = []
@@ -20,7 +20,8 @@ class OrcaQueue(QObject):
         self._log_dir = log_dir or Path(__file__).parent.parent / "logs"
         self._log_dir.mkdir(exist_ok=True)
         self._log_file = None
-        self._stopped = False  # ← новый флаг
+        self._stopped = False
+        self._gui = gui  # ← ссылка на GUI
 
     def add_job(self, inp_path: Path, out_path: Path):
         if self._current_index >= 0:
@@ -67,6 +68,11 @@ class OrcaQueue(QObject):
         if not self._jobs:
             self.queue_finished.emit()
             return
+
+        # === Освобождаем модель НА ВСЁ ВРЕМЯ ОЧЕРЕДИ ===
+        if self._gui:
+            self._gui.release_filesystem_model()
+
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self._log_file = self._log_dir / f"{timestamp}.log"
         for job in self._jobs:
@@ -77,15 +83,10 @@ class OrcaQueue(QObject):
         self._run_next_job()
 
     def _run_next_job(self):
-        if self._stopped:
-            self._current_index = -1
-            self._log_file = None
-            self.queue_finished.emit()
-            return
-
-        if self._current_index >= len(self._jobs):
-            self._current_index = -1
-            self._log_file = None
+        if self._stopped or self._current_index >= len(self._jobs):
+            # === Восстанавливаем модель ПРИ ЗАВЕРШЕНИИ ===
+            if self._gui:
+                self._gui.restore_filesystem_model()
             self.queue_finished.emit()
             return
 
@@ -100,13 +101,10 @@ class OrcaQueue(QObject):
         )
 
         self._active_jobs.append(job)
-
-        # Передаём сигналы дальше
         job.started.connect(self.job_started)
         job.finished.connect(self._on_job_finished)
         job.error_occurred.connect(self._on_job_error)
         job.completed.connect(lambda: self._cleanup_job(job))
-
         job.start_async()
 
     def _cleanup_job(self, job):
@@ -118,9 +116,8 @@ class OrcaQueue(QObject):
             status = '✅ Success' if success else '❌ Failed'
             job = self._jobs[self._current_index]
             job['status'] = status
-            display_name = job['display_name']  # ← сохраняем здесь
+            display_name = job['display_name']
             self._write_log()
-            # Эмитим сигнал с display_name
             self.job_finished.emit(inp_name, success, out_path, display_name)
         self._current_index += 1
         self._run_next_job()
@@ -136,7 +133,7 @@ class OrcaQueue(QObject):
         self._run_next_job()
 
     def terminate_current_job(self):
-        self._stopped = True  # ← помечаем, что очередь остановлена
+        self._stopped = True
         if self._active_jobs:
             job = self._active_jobs[0]
             job.terminate()

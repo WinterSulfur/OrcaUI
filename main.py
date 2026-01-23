@@ -87,7 +87,7 @@ class OrcaGUI(QMainWindow):
         self.load_settings()
         self.orca_exe = Path(r"F:\Modelling\ORCA\orca.exe")
         self.chemcraft_exe = Path(r"F:\Modelling\Chemcraft\Chemcraft.exe")
-        self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
+        self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs", gui=self)
         self._manually_stopped = False
         self.current_file = None
 
@@ -390,6 +390,12 @@ class OrcaGUI(QMainWindow):
         if self.queue.is_empty():
             QMessageBox.information(self, "Queue empty", "No jobs to run.")
             return
+
+        # === Закрываем открытый файл ===
+        self.editor.setPlainText("")
+        self.current_file = None
+        self.file_path_label.setText("No file opened")
+
         self.start_queue_btn.setEnabled(False)
         self.stop_queue_btn.setEnabled(True)
         self.clear_queue_btn.setEnabled(False)
@@ -580,6 +586,43 @@ class OrcaGUI(QMainWindow):
         self.find_dialog.show()
         self.find_dialog.raise_()
         self.find_dialog.activateWindow()
+
+    def release_filesystem_model(self):
+        """Полностью отключает модель от дерева."""
+        self._saved_root_path = self.model.rootPath()
+        self._expanded_paths = self._get_expanded_paths(self.tree.rootIndex())
+        self.tree.setModel(None)  # ← ключевое!
+
+    def restore_filesystem_model(self):
+        """Восстанавливает модель и состояние дерева."""
+        self.tree.setModel(self.model)
+        if hasattr(self, '_saved_root_path') and self._saved_root_path:
+            self.model.setRootPath(self._saved_root_path)
+            self.tree.setRootIndex(self.model.index(self._saved_root_path))
+            self._restore_expanded_paths(self.tree.rootIndex(), self._expanded_paths)
+
+    def _get_expanded_paths(self, index):
+        """Сохраняет развёрнутые пути."""
+        paths = []
+        if self.tree.isExpanded(index):
+            path = self.model.filePath(index)
+            if path:
+                paths.append(path)
+            for row in range(self.model.rowCount(index)):
+                child = self.model.index(row, 0, index)
+                paths.extend(self._get_expanded_paths(child))
+        return paths
+
+    def _restore_expanded_paths(self, index, saved_paths):
+        """Восстанавливает развёрнутые пути."""
+        if not saved_paths:
+            return
+        path = self.model.filePath(index)
+        if path in saved_paths:
+            self.tree.expand(index)
+        for row in range(self.model.rowCount(index)):
+            child = self.model.index(row, 0, index)
+            self._restore_expanded_paths(child, saved_paths)
 
     
 
