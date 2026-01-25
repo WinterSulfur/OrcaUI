@@ -1,10 +1,10 @@
 from PySide6.QtWidgets import QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog
 
 class SettingsDialog(QDialog):
-    def __init__(self, orca_path: str, chemcraft_path: str, parent=None):
+    def __init__(self, orca_path: str, chemcraft_linux: str, chemcraft_windows: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(500, 150)
+        self.resize(600, 180)
 
         # ORCA
         self.orca_input = QLineEdit(orca_path)
@@ -16,15 +16,29 @@ class SettingsDialog(QDialog):
         orca_layout.addWidget(self.orca_input)
         orca_layout.addWidget(orca_browse)
 
-        # Chemcraft
-        self.chemcraft_input = QLineEdit(chemcraft_path)
-        chemcraft_browse = QPushButton("Browse...")
-        chemcraft_browse.clicked.connect(lambda: self._browse_file(self.chemcraft_input, "Select Chemcraft executable"))
+        # Chemcraft Linux
+        self.chemcraft_linux_input = QLineEdit(chemcraft_linux)
+        chemcraft_linux_browse = QPushButton("Browse...")
+        chemcraft_linux_browse.clicked.connect(
+            lambda: self._browse_file(self.chemcraft_linux_input, "Select Chemcraft (Linux)")
+        )
 
-        chemcraft_layout = QHBoxLayout()
-        chemcraft_layout.addWidget(QLabel("Chemcraft path:"))
-        chemcraft_layout.addWidget(self.chemcraft_input)
-        chemcraft_layout.addWidget(chemcraft_browse)
+        chemcraft_linux_layout = QHBoxLayout()
+        chemcraft_linux_layout.addWidget(QLabel("Chemcraft (Linux):"))
+        chemcraft_linux_layout.addWidget(self.chemcraft_linux_input)
+        chemcraft_linux_layout.addWidget(chemcraft_linux_browse)
+
+        # Chemcraft Windows
+        self.chemcraft_windows_input = QLineEdit(chemcraft_windows)
+        chemcraft_windows_browse = QPushButton("Browse...")
+        chemcraft_windows_browse.clicked.connect(
+            lambda: self._browse_file(self.chemcraft_windows_input, "Select Chemcraft.exe (Windows)")
+        )
+
+        chemcraft_windows_layout = QHBoxLayout()
+        chemcraft_windows_layout.addWidget(QLabel("Chemcraft (Windows):"))
+        chemcraft_windows_layout.addWidget(self.chemcraft_windows_input)
+        chemcraft_windows_layout.addWidget(chemcraft_windows_browse)
 
         # Кнопки
         btn_ok = QPushButton("Apply")
@@ -39,17 +53,21 @@ class SettingsDialog(QDialog):
 
         layout = QVBoxLayout()
         layout.addLayout(orca_layout)
-        layout.addLayout(chemcraft_layout)
+        layout.addLayout(chemcraft_linux_layout)
+        layout.addLayout(chemcraft_windows_layout)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
     def _browse_file(self, line_edit: QLineEdit, title: str):
-        path, _ = QFileDialog.getOpenFileName(self, title, "", "Executable (*.exe)")
+        path, _ = QFileDialog.getOpenFileName(self, title, "", "Executable (*)")
         if path:
             line_edit.setText(path)
 
     def get_orca_path(self) -> str:
         return self.orca_input.text()
 
-    def get_chemcraft_path(self) -> str:
-        return self.chemcraft_input.text()
+    def get_chemcraft_linux_path(self) -> str:
+        return self.chemcraft_linux_input.text()
+
+    def get_chemcraft_windows_path(self) -> str:
+        return self.chemcraft_windows_input.text()

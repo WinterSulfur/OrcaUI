@@ -20,7 +20,8 @@ class OrcaQueue(QObject):
         self._log_dir = log_dir or Path(__file__).parent.parent / "logs"
         self._log_dir.mkdir(exist_ok=True)
         self._log_file = None
-        self._stopped = False  # ← новый флаг
+
+        self._stopped = False
 
     def add_job(self, inp_path: Path, out_path: Path):
         if self._current_index >= 0:
@@ -77,13 +78,7 @@ class OrcaQueue(QObject):
         self._run_next_job()
 
     def _run_next_job(self):
-        if self._stopped:
-            self._current_index = -1
-            self._log_file = None
-            self.queue_finished.emit()
-            return
-
-        if self._current_index >= len(self._jobs):
+        if self._stopped or self._current_index >= len(self._jobs):
             self._current_index = -1
             self._log_file = None
             self.queue_finished.emit()

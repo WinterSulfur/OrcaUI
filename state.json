@@ -1,10 +1,5 @@
-{
-  "root_path": "F:/NewModelling/test_program",
-  "current_file": "F:/NewModelling/test_program/Results/opt.out",
-  "queue": [
-    {
-      "inp": "F:\\NewModelling\\test_program\\Calculations\\opt.inp",
-      "display_name": "test_program : opt.inp"
-    }
-  ]
+  "root_path": "/media/winter-sulfur/Bistriy/NewModelling",
+  "current_file": "/media/winter-sulfur/Bistriy/NewModelling/SiO2_incorrect/SiO2+Cl2+Cl r2scan-3c разрыв2/Calculations/opt_prod.inp",
+  "queue": []
+
 }

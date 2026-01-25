@@ -85,8 +85,16 @@ class OrcaGUI(QMainWindow):
         self.state_file = app_dir / "state.json"
         self.settings_file = app_dir / "settings.json"
         self.load_settings()
-        self.orca_exe = Path(r"F:\Modelling\ORCA\orca.exe")
-        self.chemcraft_exe = Path(r"F:\Modelling\Chemcraft\Chemcraft.exe")
+        # Пути по умолчанию для Linux
+        default_orca = "/home/winter-sulfur/programs/orca_6_1_1_linux_x86-64_shared_openmpi418_nodmrg/orca"
+        default_chemcraft_linux = "/home/winter-sulfur/programs/Chemcraft_b638l_lin64/Chemcraft"
+        default_chemcraft_windows = "/media/winter-sulfur/Bistriy/Modelling/Chemcraft/Chemcraft.exe"
+
+        self.orca_exe = Path(default_orca)
+        self.chemcraft_linux_exe = Path(default_chemcraft_linux)
+        self.chemcraft_windows_exe = Path(default_chemcraft_windows)
+
+        # Если настройки загружены — они переопределят пути
         self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
         self._manually_stopped = False
         self.current_file = None
@@ -313,9 +321,14 @@ class OrcaGUI(QMainWindow):
         elif p.is_file() and p.suffix == '.json':
             menu.addAction("📥 Add Pipeline to Queue", lambda: self.load_pipeline(p))
 
-        # Для ЛЮБОГО файла — открытие в Chemcraft (если поддерживается)
+        # Для ЛЮБОГО файла — открытие в Chemcraft
         if p.is_file():
-            menu.addAction("🔬 Open in Chemcraft", lambda: self.open_in_chemcraft(p))
+            if self.chemcraft_linux_exe.is_file():
+                menu.addAction("🔬 Open in Chemcraft (Linux)", 
+                            lambda: self.open_in_chemcraft_linux(p))
+            if self.chemcraft_windows_exe.is_file():
+                menu.addAction("🔬 Open in Chemcraft (Windows)", 
+                            lambda: self.open_in_chemcraft_windows(p))
 
         if not menu.isEmpty():
             menu.exec(self.tree.viewport().mapToGlobal(position))
@@ -524,24 +537,30 @@ class OrcaGUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load pipeline:\n{e}")
 
-    def open_in_chemcraft(self, file_path: Path):
-        if not self.chemcraft_exe.is_file():
-            QMessageBox.critical(self, "Error", f"Chemcraft not found:\n{self.chemcraft_exe}")
-            return
-
-        if not file_path.is_file():
-            return
-
+    def open_in_chemcraft_linux(self, file_path: Path):
         try:
-            # Запускаем Chemcraft с файлом
-            subprocess.Popen([str(self.chemcraft_exe), str(file_path)])
+            subprocess.Popen([str(self.chemcraft_linux_exe), str(file_path)])
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open in Chemcraft:\n{e}")
-    
+            QMessageBox.critical(self, "Error", f"Failed to open in Chemcraft (Linux):\n{e}")
+
+    def open_in_chemcraft_windows(self, file_path: Path):
+        try:
+            subprocess.Popen([
+                "env",
+                "WINEDEBUG=-all",
+                "WINEPREFIX=/home/winter-sulfur/.wine-chemcraft",
+                "wine",
+                str(self.chemcraft_windows_exe),
+                str(file_path)
+            ])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open in Chemcraft (Windows):\n{e}")
+            
     def save_settings(self):
         settings = {
             "orca_exe": str(self.orca_exe),
-            "chemcraft_exe": str(self.chemcraft_exe)
+            "chemcraft_linux": str(self.chemcraft_linux_exe),
+            "chemcraft_windows": str(self.chemcraft_windows_exe)
         }
         try:
             with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -556,20 +575,27 @@ class OrcaGUI(QMainWindow):
         try:
             with open(self.settings_file, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
-            self.orca_exe = Path(settings.get("orca_exe", r"F:\Modelling\ORCA\orca.exe"))
-            self.chemcraft_exe = Path(settings.get("chemcraft_exe", r"F:\Modelling\Chemcraft\Chemcraft.exe"))
+            default_orca = "/home/winter-sulfur/programs/orca_6_1_1_linux_x86-64_shared_openmpi418_nodmrg/orca"
+            default_chemcraft_linux = "/home/winter-sulfur/programs/Chemcraft_b638l_lin64/Chemcraft"
+            default_chemcraft_windows = "/media/winter-sulfur/Bistriy/Modelling/Chemcraft/Chemcraft.exe"
+            
+            self.orca_exe = Path(settings.get("orca_exe", default_orca))
+            self.chemcraft_linux_exe = Path(settings.get("chemcraft_linux", default_chemcraft_linux))
+            self.chemcraft_windows_exe = Path(settings.get("chemcraft_windows", default_chemcraft_windows))
         except Exception as e:
             print(f"[WARN] Failed to load settings: {e}")
 
     def open_settings(self):
         dialog = settings.SettingsDialog(
             str(self.orca_exe),
-            str(self.chemcraft_exe),
+            str(self.chemcraft_linux_exe),
+            str(self.chemcraft_windows_exe),
             self
         )
         if dialog.exec() == QDialog.Accepted:
             self.orca_exe = Path(dialog.get_orca_path())
-            self.chemcraft_exe = Path(dialog.get_chemcraft_path())
+            self.chemcraft_linux_exe = Path(dialog.get_chemcraft_linux_path())
+            self.chemcraft_windows_exe = Path(dialog.get_chemcraft_windows_path())
             self.save_settings()
             QMessageBox.information(self, "Success", "Settings saved.")
 
@@ -580,7 +606,6 @@ class OrcaGUI(QMainWindow):
         self.find_dialog.show()
         self.find_dialog.raise_()
         self.find_dialog.activateWindow()
-
     
 
 def main():
