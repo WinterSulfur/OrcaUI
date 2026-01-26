@@ -17,7 +17,6 @@ class OrcaJob(QObject):
         self.out_path = out_path
         self._proc = None
         self._temp_bat = None
-
     def run(self):
         try:
             inp_name = self.inp_path.name
