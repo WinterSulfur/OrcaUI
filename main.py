@@ -84,8 +84,8 @@ class OrcaGUI(QMainWindow):
         app_dir = self.get_app_dir()
         self.state_file = app_dir / "state.json"
         self.settings_file = app_dir / "settings.json"
-        self.load_settings()
-        # Пути по умолчанию для Linux
+
+        # Сначала задаём значения по умолчанию
         default_orca = "/home/winter-sulfur/programs/orca_6_1_1_linux_x86-64_shared_openmpi418_nodmrg/orca"
         default_chemcraft_linux = "/home/winter-sulfur/programs/Chemcraft_b638l_lin64/Chemcraft"
         default_chemcraft_windows = "/media/winter-sulfur/Bistriy/Modelling/Chemcraft/Chemcraft.exe"
@@ -94,7 +94,10 @@ class OrcaGUI(QMainWindow):
         self.chemcraft_linux_exe = Path(default_chemcraft_linux)
         self.chemcraft_windows_exe = Path(default_chemcraft_windows)
 
-        # Если настройки загружены — они переопределят пути
+        # ЗАТЕМ загружаем настройки (они могут переопределить значения по умолчанию)
+        self.load_settings()
+
+        # Теперь используем загруженные (или значения по умолчанию) пути
         self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
         self._manually_stopped = False
         self.current_file = None
@@ -575,13 +578,15 @@ class OrcaGUI(QMainWindow):
         try:
             with open(self.settings_file, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
-            default_orca = "/home/winter-sulfur/programs/orca_6_1_1_linux_x86-64_shared_openmpi418_nodmrg/orca"
-            default_chemcraft_linux = "/home/winter-sulfur/programs/Chemcraft_b638l_lin64/Chemcraft"
-            default_chemcraft_windows = "/media/winter-sulfur/Bistriy/Modelling/Chemcraft/Chemcraft.exe"
             
-            self.orca_exe = Path(settings.get("orca_exe", default_orca))
-            self.chemcraft_linux_exe = Path(settings.get("chemcraft_linux", default_chemcraft_linux))
-            self.chemcraft_windows_exe = Path(settings.get("chemcraft_windows", default_chemcraft_windows))
+            # Обновляем атрибуты, если ключи существуют
+            if "orca_exe" in settings:
+                self.orca_exe = Path(settings["orca_exe"])
+            if "chemcraft_linux" in settings:
+                self.chemcraft_linux_exe = Path(settings["chemcraft_linux"])
+            if "chemcraft_windows" in settings:
+                self.chemcraft_windows_exe = Path(settings["chemcraft_windows"])
+                
         except Exception as e:
             print(f"[WARN] Failed to load settings: {e}")
 
