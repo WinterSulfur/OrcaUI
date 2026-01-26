@@ -85,19 +85,21 @@ class OrcaGUI(QMainWindow):
         self.state_file = app_dir / "state.json"
         self.settings_file = app_dir / "settings.json"
 
+
         # Сначала задаём значения по умолчанию
         default_orca = "/home/winter-sulfur/programs/orca_6_1_1_linux_x86-64_shared_openmpi418_nodmrg/orca"
         default_chemcraft_linux = "/home/winter-sulfur/programs/Chemcraft_b638l_lin64/Chemcraft"
         default_chemcraft_windows = "/media/winter-sulfur/Bistriy/Modelling/Chemcraft/Chemcraft.exe"
+        default_locale = "C.UTF-8"  
 
         self.orca_exe = Path(default_orca)
         self.chemcraft_linux_exe = Path(default_chemcraft_linux)
         self.chemcraft_windows_exe = Path(default_chemcraft_windows)
+        self.orca_locale = default_locale
 
-        # ЗАТЕМ загружаем настройки (они могут переопределить значения по умолчанию)
+        # ЗАТЕМ загружаем настройки
         self.load_settings()
 
-        # Теперь используем загруженные (или значения по умолчанию) пути
         self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
         self._manually_stopped = False
         self.current_file = None
@@ -564,7 +566,8 @@ class OrcaGUI(QMainWindow):
         settings = {
             "orca_exe": str(self.orca_exe),
             "chemcraft_linux": str(self.chemcraft_linux_exe),
-            "chemcraft_windows": str(self.chemcraft_windows_exe)
+            "chemcraft_windows": str(self.chemcraft_windows_exe),
+            "orca_locale": self.orca_locale  # ← сохраняем локаль
         }
         try:
             with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -580,13 +583,14 @@ class OrcaGUI(QMainWindow):
             with open(self.settings_file, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
             
-            # Обновляем атрибуты, если ключи существуют
             if "orca_exe" in settings:
                 self.orca_exe = Path(settings["orca_exe"])
             if "chemcraft_linux" in settings:
                 self.chemcraft_linux_exe = Path(settings["chemcraft_linux"])
             if "chemcraft_windows" in settings:
                 self.chemcraft_windows_exe = Path(settings["chemcraft_windows"])
+            if "orca_locale" in settings:
+                self.orca_locale = settings["orca_locale"]
                 
         except Exception as e:
             print(f"[WARN] Failed to load settings: {e}")
@@ -596,12 +600,14 @@ class OrcaGUI(QMainWindow):
             str(self.orca_exe),
             str(self.chemcraft_linux_exe),
             str(self.chemcraft_windows_exe),
+            self.orca_locale,  # ← передаём текущую локаль
             self
         )
         if dialog.exec() == QDialog.Accepted:
             self.orca_exe = Path(dialog.get_orca_path())
             self.chemcraft_linux_exe = Path(dialog.get_chemcraft_linux_path())
             self.chemcraft_windows_exe = Path(dialog.get_chemcraft_windows_path())
+            self.orca_locale = dialog.get_locale()  # ← сохраняем выбранную локаль
             self.save_settings()
             QMessageBox.information(self, "Success", "Settings saved.")
 

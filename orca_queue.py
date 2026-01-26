@@ -11,7 +11,7 @@ class OrcaQueue(QObject):
     error_occurred = Signal(str, str, str)      # inp_name, error, display_name
     queue_finished = Signal()
 
-    def __init__(self, orca_exe: Path, log_dir: Path = None):
+    def __init__(self, orca_exe: Path, locale: str = "C.UTF-8", log_dir: Path = None):
         super().__init__()
         self.orca_exe = orca_exe
         self._jobs = []
@@ -20,7 +20,7 @@ class OrcaQueue(QObject):
         self._log_dir = log_dir or Path(__file__).parent.parent / "logs"
         self._log_dir.mkdir(exist_ok=True)
         self._log_file = None
-
+        self.orca_locale = locale
         self._stopped = False
 
     def add_job(self, inp_path: Path, out_path: Path):
@@ -91,7 +91,8 @@ class OrcaQueue(QObject):
         job = orca_job.OrcaJob(
             self.orca_exe,
             job_info['inp'],
-            job_info['out']
+            job_info['out'],
+            locale=self.orca_locale
         )
 
         self._active_jobs.append(job)

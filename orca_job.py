@@ -10,13 +10,22 @@ class OrcaJob(QObject):
     error_occurred = Signal(str, str)
     completed = Signal()
 
-    def __init__(self, orca_exe: Path, inp_path: Path, out_path: Path):
+    def __init__(self, orca_exe: Path, inp_path: Path, out_path: Path, locale: str = "C.UTF-8"):
         super().__init__()
+        
+        # Проверка на None
+        if orca_exe is None or str(orca_exe) == "None":
+            raise ValueError("orca_exe is None!")
+        if inp_path is None or str(inp_path) == "None":
+            raise ValueError("inp_path is None!")
+        if out_path is None or str(out_path) == "None":
+            raise ValueError("out_path is None!")
         self.orca_exe = orca_exe
         self.inp_path = inp_path
         self.out_path = out_path
         self._proc = None
         self._temp_bat = None
+        self.orca_locale = locale
     def run(self):
         try:
             inp_name = self.inp_path.name
@@ -34,13 +43,14 @@ class OrcaJob(QObject):
             env = os.environ.copy()
             env.pop('PYTHONPATH', None)
             env.pop('PYTHONHOME', None)
+            env['LC_ALL'] = self.orca_locale
 
             # === Запускаем ORCA напрямую (без mpiexec!) ===
             cmd = [str(self.orca_exe), inp_name]
 
             # Запускаем .bat
             self._proc = subprocess.Popen(
-                [str(self._temp_bat)],
+                cmd,
                 cwd=calc_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -48,7 +58,7 @@ class OrcaJob(QObject):
                 encoding='utf-8',
                 errors='replace',
                 env=env,
-                close_fds=True  # ← важно для Linux
+                close_fds=True
             )
 
             # === Потоковая запись вывода ===

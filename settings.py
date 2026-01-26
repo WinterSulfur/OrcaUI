@@ -1,10 +1,14 @@
-from PySide6.QtWidgets import QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog
+# settings.py
+from PySide6.QtWidgets import (
+    QDialog, QLabel, QLineEdit, QPushButton, QComboBox,
+    QVBoxLayout, QHBoxLayout, QFileDialog
+)
 
 class SettingsDialog(QDialog):
-    def __init__(self, orca_path: str, chemcraft_linux: str, chemcraft_windows: str, parent=None):
+    def __init__(self, orca_path: str, chemcraft_linux: str, chemcraft_windows: str, locale: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(600, 180)
+        self.resize(600, 220)
 
         # ORCA
         self.orca_input = QLineEdit(orca_path)
@@ -40,6 +44,20 @@ class SettingsDialog(QDialog):
         chemcraft_windows_layout.addWidget(self.chemcraft_windows_input)
         chemcraft_windows_layout.addWidget(chemcraft_windows_browse)
 
+        # Locale
+        self.locale_combo = QComboBox()
+        self.locale_combo.addItems([
+            "C.UTF-8",
+            "en_US.UTF-8",
+            "ru_RU.UTF-8",
+            "POSIX"
+        ])
+        self.locale_combo.setCurrentText(locale)
+
+        locale_layout = QHBoxLayout()
+        locale_layout.addWidget(QLabel("Locale for ORCA:"))
+        locale_layout.addWidget(self.locale_combo)
+
         # Кнопки
         btn_ok = QPushButton("Apply")
         btn_cancel = QPushButton("Cancel")
@@ -55,6 +73,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(orca_layout)
         layout.addLayout(chemcraft_linux_layout)
         layout.addLayout(chemcraft_windows_layout)
+        layout.addLayout(locale_layout)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
@@ -71,3 +90,6 @@ class SettingsDialog(QDialog):
 
     def get_chemcraft_windows_path(self) -> str:
         return self.chemcraft_windows_input.text()
+    
+    def get_locale(self) -> str:
+        return self.locale_combo.currentText()
