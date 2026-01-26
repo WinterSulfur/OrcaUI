@@ -81,7 +81,7 @@ class OrcaGUI(QMainWindow):
         self.resize(1400, 800)
 
         # === Paths and core data ===
-        app_dir = Path(__file__).parent
+        app_dir = self.get_app_dir()
         self.state_file = app_dir / "state.json"
         self.settings_file = app_dir / "settings.json"
         self.load_settings()
@@ -606,6 +606,15 @@ class OrcaGUI(QMainWindow):
         self.find_dialog.show()
         self.find_dialog.raise_()
         self.find_dialog.activateWindow()
+    
+    def get_app_dir(self) -> Path:
+        """Возвращает директорию, где находится исполняемый файл."""
+        if getattr(sys, 'frozen', False):
+            # Запущено как исполняемый файл (PyInstaller)
+            return Path(sys.executable).parent
+        else:
+            # Запущено как скрипт
+            return Path(__file__).parent
     
 
 def main():
