@@ -548,10 +548,11 @@ class OrcaGUI(QMainWindow):
 
     def open_in_chemcraft_windows(self, file_path: Path):
         try:
+            wine_prefix = Path.home() / ".wine-chemcraft"
             subprocess.Popen([
                 "env",
                 "WINEDEBUG=-all",
-                "WINEPREFIX=/home/winter-sulfur/.wine-chemcraft",
+                f"WINEPREFIX={wine_prefix}",
                 "wine",
                 str(self.chemcraft_windows_exe),
                 str(file_path)
