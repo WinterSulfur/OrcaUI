@@ -14,18 +14,20 @@ class OrcaQueue(QObject):
     def __init__(self, orca_exe: Path, locale: str = "C.UTF-8", log_dir: Path = None):
         super().__init__()
         self.orca_exe = orca_exe
+        self.orca_locale = locale
         self._jobs = []
-        self._current_index = -1
+        self._is_running = False
+        self._current_index = 0
         self._active_jobs = []
         self._log_dir = log_dir or Path(__file__).parent.parent / "logs"
         self._log_dir.mkdir(exist_ok=True)
         self._log_file = None
-        self.orca_locale = locale
         self._stopped = False
 
     def add_job(self, inp_path: Path, out_path: Path):
-        if self._current_index >= 0:
-            raise RuntimeError("Cannot add job after queue started")
+        # Разрешаем добавлять всегда, кроме случая активного выполнения
+        if self._is_running:
+            raise RuntimeError("Cannot add job while queue is running")
         try:
             parent2 = inp_path.parent.parent.name
             if not parent2:
@@ -41,14 +43,14 @@ class OrcaQueue(QObject):
         })
 
     def remove_job(self, index: int):
-        if self._current_index >= 0:
-            raise RuntimeError("Cannot remove job after queue started")
+        if self._is_running:
+            raise RuntimeError("Cannot modify queue while running")
         if 0 <= index < len(self._jobs):
             del self._jobs[index]
 
     def clear(self):
-        if self._current_index >= 0:
-            raise RuntimeError("Cannot clear after queue started")
+        if self._is_running:
+            raise RuntimeError("Cannot clear while queue is running")
         self._jobs.clear()
 
     def is_empty(self) -> bool:
@@ -60,26 +62,66 @@ class OrcaQueue(QObject):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(self._log_file, 'a', encoding='utf-8') as f:
             f.write(f"[{now}] Queue state:\n")
-            for job in self._jobs:
-                f.write(f"{job['display_name']} → {job['status']}\n")
+            for i, job in enumerate(self._jobs):
+                marker = "→" if i == self._current_index and self._is_running else " "
+                f.write(f"{marker}{job['display_name']} → {job['status']}\n")
             f.write("\n")
 
     def start(self):
+        """Полный перезапуск очереди с начала"""
+        if self._is_running:
+            return
+        
         if not self._jobs:
             self.queue_finished.emit()
             return
+            
+        self._stopped = False
+        self._current_index = 0  # ← всегда с начала
+        self._is_running = True
+        
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self._log_file = self._log_dir / f"{timestamp}.log"
+        
         for job in self._jobs:
             job['status'] = '⏹️ Pending'
+            
         self._write_log()
-        self._current_index = 0
+        self._active_jobs.clear()
+        self._run_next_job()
+
+    def resume(self):
+        """Продолжение с прерванного элемента (включая его пересчёт)"""
+        if self._is_running:
+            return
+            
+        if not self._jobs:
+            self.queue_finished.emit()
+            return
+            
+        # Не сбрасываем _current_index!
+        # Прерванный элемент должен быть пересчитан
+        if self._current_index >= len(self._jobs):
+            self.queue_finished.emit()
+            return
+            
+        self._stopped = False
+        self._is_running = True
+        
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._log_file = self._log_dir / f"{timestamp}_resume.log"
+        
+        # Сбрасываем статус только для ожидающих заданий
+        for i in range(self._current_index, len(self._jobs)):
+            self._jobs[i]['status'] = '⏹️ Pending'
+            
+        self._write_log()
         self._active_jobs.clear()
         self._run_next_job()
 
     def _run_next_job(self):
         if self._stopped or self._current_index >= len(self._jobs):
-            self._current_index = -1
+            self._is_running = False
             self._log_file = None
             self.queue_finished.emit()
             return
@@ -97,7 +139,6 @@ class OrcaQueue(QObject):
 
         self._active_jobs.append(job)
 
-        # Передаём сигналы дальше
         job.started.connect(self.job_started)
         job.finished.connect(self._on_job_finished)
         job.error_occurred.connect(self._on_job_error)
@@ -114,9 +155,8 @@ class OrcaQueue(QObject):
             status = '✅ Success' if success else '❌ Failed'
             job = self._jobs[self._current_index]
             job['status'] = status
-            display_name = job['display_name']  # ← сохраняем здесь
+            display_name = job['display_name']
             self._write_log()
-            # Эмитим сигнал с display_name
             self.job_finished.emit(inp_name, success, out_path, display_name)
         self._current_index += 1
         self._run_next_job()
@@ -132,7 +172,7 @@ class OrcaQueue(QObject):
         self._run_next_job()
 
     def terminate_current_job(self):
-        self._stopped = True  # ← помечаем, что очередь остановлена
+        self._stopped = True
         if self._active_jobs:
             job = self._active_jobs[0]
             job.terminate()

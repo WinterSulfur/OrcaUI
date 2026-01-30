@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QPushButton, QListWidget, QListWidgetItem, QHBoxLayout,
     QMessageBox, QAbstractItemView, QLabel, QLineEdit, QDialog
 ) 
-from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu
+from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu, QHeaderView
 from PySide6.QtGui import QFont, QKeySequence, QShortcut, QIcon
 from PySide6.QtCore import Qt, QModelIndex, QMimeData, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
@@ -17,7 +17,37 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent
 import settings
 import orca_queue
 import find_dialog
+import shutil 
+from send2trash import send2trash
+from create_file_dialog import CreateFileDialog
 
+class CreateTemplateDialog(QDialog):
+    def __init__(self, original_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Template")
+        self.resize(350, 120)
+        
+        self.name_input = QLineEdit(original_name)
+        self.name_input.selectAll()  # выделяем всё для быстрого редактирования
+        
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Template name:"))
+        layout.addWidget(self.name_input)
+        
+        btn_layout = QHBoxLayout()
+        btn_create = QPushButton("Create")
+        btn_cancel = QPushButton("Cancel")
+        btn_create.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_create)
+        btn_layout.addWidget(btn_cancel)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+    
+    def get_template_name(self) -> str:
+        return self.name_input.text().strip()
 
 class QueueListWidget(QListWidget):
     def __init__(self, parent=None):
@@ -78,7 +108,7 @@ class OrcaGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ORCA Project Manager")
-        self.resize(1400, 800)
+        self.resize(1600, 900)
 
         # === Paths and core data ===
         app_dir = self.get_app_dir()
@@ -100,7 +130,7 @@ class OrcaGUI(QMainWindow):
         # ЗАТЕМ загружаем настройки
         self.load_settings()
 
-        self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs")
+        self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs", locale=self.orca_locale)
         self._manually_stopped = False
         self.current_file = None
 
@@ -126,7 +156,7 @@ class OrcaGUI(QMainWindow):
         # === File system model ===
         self.model = QFileSystemModel()
         self.model.setRootPath("")
-        self.model.setNameFilters(["*.inp", "*.out", "*trj.xyz", "*.json"])
+        self.model.setNameFilters(["*.inp", "*.out", "*_MEP_trj.xyz", "*.json", "*_MEP_ALL_trj.xyz"])
         self.model.setNameFilterDisables(False)
 
         # === File tree (left panel) ===
@@ -143,6 +173,10 @@ class OrcaGUI(QMainWindow):
         self.tree.setRootIsDecorated(True)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.on_tree_context_menu)
+        self.tree.setTextElideMode(Qt.ElideNone)  # ← отключает обрезание текста
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._clipboard_path = None
+        self._clipboard_is_cut = False
 
         # === Text editor components ===
         self.editor = QPlainTextEdit()
@@ -166,7 +200,7 @@ class OrcaGUI(QMainWindow):
         self.queue_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.queue_list.customContextMenuRequested.connect(self.on_queue_context_menu)
 
-        # === Queue control buttons ===
+        # === Queue control buttons (основные) ===
         self.start_queue_btn = QPushButton("▶ Start Queue")
         self.stop_queue_btn = QPushButton("⏹ Stop Queue")
         self.clear_queue_btn = QPushButton("🗑 Clear Queue")
@@ -184,15 +218,27 @@ class OrcaGUI(QMainWindow):
         queue_main_buttons_container = QWidget()
         queue_main_buttons_container.setLayout(queue_main_buttons_layout)
 
-        # === Кнопка Create Pipeline (отдельно снизу) ===
+        # === Дополнительные кнопки: Resume + Create Pipeline ===
+        self.resume_queue_btn = QPushButton("⏯ Resume Queue")
         self.create_pipeline_btn = QPushButton("📦 Create Pipeline")
-        self.create_pipeline_btn.clicked.connect(self.create_pipeline)
 
-        # === Right panel: queue list + buttons ===
+        self.resume_queue_btn.clicked.connect(self.resume_queue)
+        self.create_pipeline_btn.clicked.connect(self.create_pipeline)
+        self.resume_queue_btn.setEnabled(False)
+
+        # Располагаем их в одну строку
+        extra_buttons_layout = QHBoxLayout()
+        extra_buttons_layout.addWidget(self.resume_queue_btn)
+        extra_buttons_layout.addWidget(self.create_pipeline_btn)
+
+        extra_buttons_container = QWidget()
+        extra_buttons_container.setLayout(extra_buttons_layout)
+
+        # === Right panel: queue list + все кнопки ===
         queue_layout = QVBoxLayout()
         queue_layout.addWidget(self.queue_list)
         queue_layout.addWidget(queue_main_buttons_container)
-        queue_layout.addWidget(self.create_pipeline_btn)  # ← теперь снизу
+        queue_layout.addWidget(extra_buttons_container)  # ← обе кнопки в одной строке
 
         queue_container = QWidget()
         queue_container.setLayout(queue_layout)
@@ -326,6 +372,24 @@ class OrcaGUI(QMainWindow):
         elif p.is_file() and p.suffix == '.json':
             menu.addAction("📥 Add Pipeline to Queue", lambda: self.load_pipeline(p))
 
+        # Операции с файлами/папками
+        if p.exists():
+            # Копировать
+            menu.addAction("📋 Copy", lambda: self._copy_path(p))
+            # Вырезать
+            menu.addAction("✂️ Cut", lambda: self._cut_path(p))
+            # Удалить
+            menu.addAction("🗑️ Delete", lambda: self._delete_path(p))
+
+        # Вставить (доступно всегда, если есть буфер)
+        if self._clipboard_path and self._clipboard_path.exists():
+            target_dir = p if p.is_dir() else p.parent
+            menu.addAction("📋 Paste", lambda: self._paste_to(target_dir))
+
+        # Создать текстовый файл
+        if p.is_dir():
+            menu.addAction("📄 New File...", lambda: self._create_text_file(p))
+
         # Для ЛЮБОГО файла — открытие в Chemcraft
         if p.is_file():
             if self.chemcraft_linux_exe.is_file():
@@ -334,6 +398,7 @@ class OrcaGUI(QMainWindow):
             if self.chemcraft_windows_exe.is_file():
                 menu.addAction("🔬 Open in Chemcraft (Windows)", 
                             lambda: self.open_in_chemcraft_windows(p))
+            menu.addAction("📄 Create Template", lambda: self._create_template_from_file(p))
 
         if not menu.isEmpty():
             menu.exec(self.tree.viewport().mapToGlobal(position))
@@ -442,19 +507,18 @@ class OrcaGUI(QMainWindow):
         else:
             self._manually_stopped = False  # сброс
         self._on_queue_stopped()
+        self.resume_queue_btn.setEnabled(False)
     
     def stop_queue(self):
         self._manually_stopped = True
         self.queue.terminate_current_job()
-        if self.queue._current_index >= 0 and self.queue._current_index < len(self.queue._jobs):
-            self.queue._jobs[self.queue._current_index]['status'] = '⏹️ Stopped'
-            self.queue._write_log()
         self._on_queue_stopped()
 
     def _on_queue_stopped(self):
         self.start_queue_btn.setEnabled(True)
         self.stop_queue_btn.setEnabled(False)
         self.clear_queue_btn.setEnabled(True)
+        self.resume_queue_btn.setEnabled(True)
 
     def clear_queue(self):
         if self.queue._current_index >= 0:
@@ -627,6 +691,172 @@ class OrcaGUI(QMainWindow):
         else:
             # Запущено как скрипт
             return Path(__file__).parent
+    
+    def resume_queue(self):
+        if self.queue.is_empty():
+            QMessageBox.information(self, "Queue empty", "No jobs to resume.")
+            return
+        self.start_queue_btn.setEnabled(False)
+        self.resume_queue_btn.setEnabled(False)
+        self.stop_queue_btn.setEnabled(True)
+        self.clear_queue_btn.setEnabled(False)
+        self.queue.resume()
+    
+    def _copy_path(self, path: Path):
+        self._clipboard_path = path
+        self._clipboard_is_cut = False
+
+    def _cut_path(self, path: Path):
+        self._clipboard_path = path
+        self._clipboard_is_cut = True
+
+    def _paste_to(self, target_dir: Path):
+        if not self._clipboard_path or not self._clipboard_path.exists():
+            return
+            
+        try:
+            base_name = self._clipboard_path.name
+            stem = self._clipboard_path.stem
+            suffix = self._clipboard_path.suffix
+            new_path = target_dir / base_name
+            counter = 1
+
+            # Генерируем уникальное имя: file.txt → file_copy1.txt → file_copy2.txt ...
+            while new_path.exists():
+                new_name = f"{stem}_copy{counter}{suffix}" if suffix else f"{stem}_copy{counter}"
+                new_path = target_dir / new_name
+                counter += 1
+
+            if self._clipboard_is_cut:
+                import shutil
+                if self._clipboard_path.is_dir():
+                    shutil.move(str(self._clipboard_path), str(new_path))
+                else:
+                    self._clipboard_path.rename(new_path)
+                self._clipboard_path = None
+                self._clipboard_is_cut = False
+            else:
+                import shutil
+                if self._clipboard_path.is_dir():
+                    shutil.copytree(str(self._clipboard_path), str(new_path))
+                else:
+                    shutil.copy2(str(self._clipboard_path), str(new_path))
+                    
+            # Обновляем модель
+            self.model.setRootPath(self.model.rootPath())
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to paste:\n{e}")
+
+    def _delete_path(self, path: Path):
+        if not path.exists():
+            return
+        try:
+            send2trash(str(path))  # ← перемещает в корзину
+            self.model.setRootPath(self.model.rootPath())
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to move to trash:\n{e}")
+
+    def _create_text_file(self, target_dir: Path):
+        # Получаем папку шаблонов
+        app_dir = self.get_app_dir()
+        templates_dir = app_dir / "Templates"
+        templates_dir.mkdir(exist_ok=True)
+        
+        # Собираем список шаблонов (.inp файлы)
+        templates = []
+        for item in templates_dir.iterdir():
+            if item.is_file() and item.suffix == '.inp':
+                templates.append(item)
+        
+        # Показываем диалог
+        dialog = CreateFileDialog(templates, self)
+        if dialog.exec() == QDialog.Accepted:
+            try:
+                # Проверяем, выбран ли шаблон
+                template = dialog.get_selected_template()
+                if template:
+                    # Копируем шаблон как есть
+                    new_path = target_dir / template.name
+                    counter = 1
+                    while new_path.exists():
+                        stem = template.stem
+                        suffix = template.suffix
+                        new_name = f"{stem}_copy{counter}{suffix}"
+                        new_path = target_dir / new_name
+                        counter += 1
+                    
+                    import shutil
+                    shutil.copy2(template, new_path)
+                    
+                else:
+                    # Создаём пустой файл
+                    name = dialog.get_custom_name()
+                    if not name:
+                        return
+                    new_path = target_dir / name
+                    
+                    # Проверяем корректность имени
+                    if '/' in name or '\\' in name:
+                        QMessageBox.warning(self, "Invalid name", "Filename cannot contain path separators.")
+                        return
+                        
+                    counter = 1
+                    base_new_path = new_path
+                    while new_path.exists():
+                        stem = base_new_path.stem
+                        suffix = base_new_path.suffix
+                        new_name = f"{stem}_copy{counter}{suffix}" if suffix else f"{stem}_copy{counter}"
+                        new_path = target_dir / new_name
+                        counter += 1
+                    
+                    new_path.write_text('', encoding='utf-8')
+                
+                # Обновляем модель
+                self.model.setRootPath(self.model.rootPath())
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to create file:\n{e}")
+
+    def _create_template_from_file(self, file_path: Path):
+        if not file_path.is_file():
+            return
+            
+        try:
+            # Показываем диалог для ввода имени шаблона
+            dialog = CreateTemplateDialog(file_path.name, self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+                
+            template_name = dialog.get_template_name()
+            if not template_name:
+                QMessageBox.warning(self, "Invalid name", "Template name cannot be empty.")
+                return
+                
+            app_dir = self.get_app_dir()
+            templates_dir = app_dir / "Templates"
+            templates_dir.mkdir(exist_ok=True)
+            
+            template_path = templates_dir / template_name
+            
+            # Проверяем, существует ли шаблон с таким именем
+            if template_path.exists():
+                QMessageBox.warning(
+                    self, "Template exists", 
+                    f"Template '{template_name}' already exists in Templates folder.\n"
+                    "Please choose a different name or delete the existing template."
+                )
+                return
+                
+            # Копируем файл как шаблон
+            import shutil
+            shutil.copy2(file_path, template_path)
+            
+            # Обновляем модель
+            self.model.setRootPath(self.model.rootPath())
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create template:\n{e}")
     
 
 def main():
