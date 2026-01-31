@@ -66,7 +66,8 @@ class OrcaJob(QObject):
                 encoding='utf-8',
                 errors='replace',
                 env=env,
-                close_fds=True
+                close_fds=True,
+                start_new_session=True
             )
 
             # === Потоковая запись вывода ===
@@ -114,12 +115,25 @@ class OrcaJob(QObject):
 
     def terminate(self):
         if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
+            # Убиваем всю группу процессов по PGID
             try:
+                import os
+                os.killpg(os.getpgid(self._proc.pid), 15)  # SIGTERM
                 self._proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-                self._proc.wait()
+            except (ProcessLookupError, TimeoutError, OSError):
+                try:
+                    os.killpg(os.getpgid(self._proc.pid), 9)  # SIGKILL
+                    self._proc.wait(timeout=2)
+                except:
+                    pass
+            except Exception:
+                # fallback на обычный terminate/kill
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait()
         self._cleanup()
         self.completed.emit()
 

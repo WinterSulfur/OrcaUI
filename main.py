@@ -516,10 +516,10 @@ class OrcaGUI(QMainWindow):
     def on_queue_finished(self):
         if not self._manually_stopped:
             QMessageBox.information(self, "Queue done", "All calculations completed.")
+            self.resume_queue_btn.setEnabled(False) 
         else:
-            self._manually_stopped = False  # сброс
+            self._manually_stopped = False
         self._on_queue_stopped()
-        self.resume_queue_btn.setEnabled(False)
     
     def stop_queue(self):
         self._manually_stopped = True

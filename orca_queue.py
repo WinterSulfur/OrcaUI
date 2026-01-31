@@ -24,6 +24,7 @@ class OrcaQueue(QObject):
         self._log_file = None
         self._stopped = False
         self.disable_gpu = disable_gpu
+        self._job_was_terminated = False
         self._parser = OrcaParser()
 
     def add_job(self, inp_path: Path, out_path: Path):
@@ -107,6 +108,7 @@ class OrcaQueue(QObject):
             return
             
         self._stopped = False
+        self._job_was_terminated = False 
         self._is_running = True
         
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -163,16 +165,18 @@ class OrcaQueue(QObject):
                 job['status'] = status
                 display_name = job['display_name']
                 self._write_log()
-                
                 if success:
                     out_path_obj = Path(out_path)
                     project_root = out_path_obj.parent.parent.parent
                     self._parser.parse(out_path_obj, project_root)
-                    
                 self.job_finished.emit(inp_name, success, out_path, display_name)
         finally:
-            self._current_index += 1
-            # Проверяем завершение после обработки
+            # ← Условное увеличение индекса
+            if not self._job_was_terminated:
+                self._current_index += 1
+            else:
+                self._job_was_terminated = False  # сброс флага
+
             if self._current_index >= len(self._jobs) or self._stopped:
                 self._finalize_queue()
             else:
@@ -187,7 +191,11 @@ class OrcaQueue(QObject):
                 self._write_log()
                 self.error_occurred.emit(inp_name, error, display_name)
         finally:
-            self._current_index += 1
+            if not self._job_was_terminated:
+                self._current_index += 1
+            else:
+                self._job_was_terminated = False
+
             if self._current_index >= len(self._jobs) or self._stopped:
                 self._finalize_queue()
             else:
@@ -196,8 +204,8 @@ class OrcaQueue(QObject):
     def terminate_current_job(self):
         if not self._is_running:
             return
-            
         self._stopped = True
+        self._job_was_terminated = True  
         if self._active_jobs:
             job = self._active_jobs[0]
             job.terminate()
