@@ -1,16 +1,5 @@
 {
   "root_path": "/media/winter-sulfur/Bistriy/NewModelling",
   "current_file": "/media/winter-sulfur/Bistriy/NewModelling/Test_Program/Results/DPLNO.out",
-  "queue": [
-    {
-      "inp": "/media/winter-sulfur/Bistriy/NewModelling/Test_Program/Calculations/DPLNO.inp",
-      "out": "/media/winter-sulfur/Bistriy/NewModelling/Test_Program/Results/DPLNO.out",
-      "display_name": "Test_Program : DPLNO.inp"
-    },
-    {
-      "inp": "/media/winter-sulfur/Bistriy/NewModelling/Test_Program/Calculations/freq.inp",
-      "out": "/media/winter-sulfur/Bistriy/NewModelling/Test_Program/Results/freq.out",
-      "display_name": "Test_Program : freq.inp"
-    }
-  ]
+  "queue": []
 }
