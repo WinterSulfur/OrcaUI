@@ -1,11 +1,11 @@
 # settings.py
 from PySide6.QtWidgets import (
     QDialog, QLabel, QLineEdit, QPushButton, QComboBox,
-    QVBoxLayout, QHBoxLayout, QFileDialog
+    QVBoxLayout, QHBoxLayout, QFileDialog, QCheckBox
 )
 
 class SettingsDialog(QDialog):
-    def __init__(self, orca_path: str, chemcraft_linux: str, chemcraft_windows: str, locale: str, parent=None):
+    def __init__(self, orca_path: str, chemcraft_linux: str, chemcraft_windows: str, locale: str,  disable_gpu: bool, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.resize(600, 220)
@@ -58,6 +58,9 @@ class SettingsDialog(QDialog):
         locale_layout.addWidget(QLabel("Locale for ORCA:"))
         locale_layout.addWidget(self.locale_combo)
 
+        self.disable_gpu_checkbox = QCheckBox("Disable GPU for ORCA (prevents crashes)")
+        self.disable_gpu_checkbox.setChecked(disable_gpu)
+
         # Кнопки
         btn_ok = QPushButton("Apply")
         btn_cancel = QPushButton("Cancel")
@@ -76,6 +79,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(locale_layout)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+        layout.addWidget(self.disable_gpu_checkbox)
 
     def _browse_file(self, line_edit: QLineEdit, title: str):
         path, _ = QFileDialog.getOpenFileName(self, title, "", "Executable (*)")
@@ -93,3 +97,6 @@ class SettingsDialog(QDialog):
     
     def get_locale(self) -> str:
         return self.locale_combo.currentText()
+    
+    def get_disable_gpu(self) -> bool:
+        return self.disable_gpu_checkbox.isChecked()

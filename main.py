@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QPushButton, QListWidget, QListWidgetItem, QHBoxLayout,
     QMessageBox, QAbstractItemView, QLabel, QLineEdit, QDialog
 ) 
-from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu, QHeaderView
+from PySide6.QtWidgets import QFileDialog, QMenuBar, QMenu, QHeaderView, QInputDialog
 from PySide6.QtGui import QFont, QKeySequence, QShortcut, QIcon
 from PySide6.QtCore import Qt, QModelIndex, QMimeData, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
@@ -115,7 +115,8 @@ class OrcaGUI(QMainWindow):
         self.state_file = app_dir / "state.json"
         self.settings_file = app_dir / "settings.json"
 
-
+        default_disable_gpu = True  # ← рекомендуется по умолчанию
+        self.disable_gpu = default_disable_gpu
         # Сначала задаём значения по умолчанию
         default_orca = "/home/winter-sulfur/programs/orca_6_1_1_linux_x86-64_shared_openmpi418_nodmrg/orca"
         default_chemcraft_linux = "/home/winter-sulfur/programs/Chemcraft_b638l_lin64/Chemcraft"
@@ -132,6 +133,7 @@ class OrcaGUI(QMainWindow):
 
         self.queue = orca_queue.OrcaQueue(self.orca_exe, log_dir=app_dir / "logs", locale=self.orca_locale)
         self._manually_stopped = False
+        self.current_root = None
         self.current_file = None
 
         # === Window icon ===
@@ -263,6 +265,9 @@ class OrcaGUI(QMainWindow):
         self.queue.error_occurred.connect(self.on_job_error)
         self.queue.queue_finished.connect(self.on_queue_finished)
 
+        self.reload_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
+        self.reload_shortcut.activated.connect(self.reload_current_file)
+
         self.find_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
         self.find_shortcut.activated.connect(self.show_find_dialog)
 
@@ -273,21 +278,24 @@ class OrcaGUI(QMainWindow):
         
 
     def save_state(self):
-        """Сохраняет текущее состояние в state.json."""
+        """Сохраняет текущее состояние программы"""
         state = {
-            "root_path": str(self.model.rootPath()) if self.model.rootPath() else None,
-            "current_file": self.current_file if self.current_file else None,
+            "root_path": str(self.current_root) if self.current_root else "",
+            "current_file": str(self.current_file) if self.current_file else "",
             "queue": []
         }
-
+        
         # Сохраняем очередь
-        for i in range(len(self.queue._jobs)):
-            job = self.queue._jobs[i]
-            state["queue"].append({
-                "inp": str(job['inp']),
-                "display_name": job['display_name']
-            })
-
+        for i in range(self.queue_list.count()):
+            item = self.queue_list.item(i)
+            job_data = self.queue.get_job_data(i)  # ← нужно реализовать этот метод
+            if job_data:
+                state["queue"].append({
+                    "inp": str(job_data["inp"]),
+                    "out": str(job_data["out"]),
+                    "display_name": job_data["display_name"]
+                })
+        
         try:
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
@@ -337,6 +345,7 @@ class OrcaGUI(QMainWindow):
             # Восстанавливаем корневую папку
             root_path = state.get("root_path")
             if root_path and Path(root_path).is_dir():
+                self.current_root = Path(root_path)  # ← важно: сохраняем в self.current_root
                 self.model.setRootPath(root_path)
                 self.tree.setRootIndex(self.model.index(root_path))
                 self.setWindowTitle(f"ORCA Project Manager - {Path(root_path).name}")
@@ -372,8 +381,11 @@ class OrcaGUI(QMainWindow):
         elif p.is_file() and p.suffix == '.json':
             menu.addAction("📥 Add Pipeline to Queue", lambda: self.load_pipeline(p))
 
-        # Операции с файлами/папками
+        # Операции с файлами/папками (доступны для любого существующего пути)
         if p.exists():
+            # Переименовать — доступно всегда
+            menu.addAction("✏️ Rename", lambda: self.rename_file(p))
+            
             # Копировать
             menu.addAction("📋 Copy", lambda: self._copy_path(p))
             # Вырезать
@@ -386,11 +398,11 @@ class OrcaGUI(QMainWindow):
             target_dir = p if p.is_dir() else p.parent
             menu.addAction("📋 Paste", lambda: self._paste_to(target_dir))
 
-        # Создать текстовый файл
+        # Создать текстовый файл (только в папке)
         if p.is_dir():
             menu.addAction("📄 New File...", lambda: self._create_text_file(p))
 
-        # Для ЛЮБОГО файла — открытие в Chemcraft
+        # Открытие в Chemcraft и создание шаблона (только для файлов)
         if p.is_file():
             if self.chemcraft_linux_exe.is_file():
                 menu.addAction("🔬 Open in Chemcraft (Linux)", 
@@ -401,7 +413,7 @@ class OrcaGUI(QMainWindow):
             menu.addAction("📄 Create Template", lambda: self._create_template_from_file(p))
 
         if not menu.isEmpty():
-            menu.exec(self.tree.viewport().mapToGlobal(position))
+            menu.exec(self.tree.mapToGlobal(position))
 
     def remove_queue_item(self, item):
         row = self.queue_list.row(item)
@@ -425,7 +437,7 @@ class OrcaGUI(QMainWindow):
             self.model.setRootPath(str(folder_path))
             self.tree.setRootIndex(self.model.index(str(folder_path)))
             self.setWindowTitle(f"ORCA Project Manager - {folder_path.name}")
-            # Сохраняем состояние после выбора
+            self.current_root = folder_path  # ← добавлено
             self.save_state()
 
     def on_file_double_clicked(self, index: QModelIndex):
@@ -435,7 +447,7 @@ class OrcaGUI(QMainWindow):
                 with open(path, 'r', encoding='utf-8', errors='replace') as f:
                     content = f.read()
                 self.editor.setPlainText(content)
-                self.current_file = path
+                self.current_file = Path(path)
                 self.file_path_label.setText(path)  # ← обновляем метку
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to open file:\n{e}")
@@ -521,7 +533,7 @@ class OrcaGUI(QMainWindow):
         self.resume_queue_btn.setEnabled(True)
 
     def clear_queue(self):
-        if self.queue._current_index >= 0:
+        if self.queue._is_running:
             QMessageBox.warning(self, "Running", "Stop queue before clearing.")
             return
         self.queue_list.clear()
@@ -631,7 +643,8 @@ class OrcaGUI(QMainWindow):
             "orca_exe": str(self.orca_exe),
             "chemcraft_linux": str(self.chemcraft_linux_exe),
             "chemcraft_windows": str(self.chemcraft_windows_exe),
-            "orca_locale": self.orca_locale  # ← сохраняем локаль
+            "orca_locale": self.orca_locale,
+            "disable_gpu": self.disable_gpu 
         }
         try:
             with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -655,6 +668,8 @@ class OrcaGUI(QMainWindow):
                 self.chemcraft_windows_exe = Path(settings["chemcraft_windows"])
             if "orca_locale" in settings:
                 self.orca_locale = settings["orca_locale"]
+            if "disable_gpu" in settings:
+                self.disable_gpu = settings["disable_gpu"]
                 
         except Exception as e:
             print(f"[WARN] Failed to load settings: {e}")
@@ -665,6 +680,7 @@ class OrcaGUI(QMainWindow):
             str(self.chemcraft_linux_exe),
             str(self.chemcraft_windows_exe),
             self.orca_locale,  # ← передаём текущую локаль
+            self.disable_gpu,
             self
         )
         if dialog.exec() == QDialog.Accepted:
@@ -672,6 +688,7 @@ class OrcaGUI(QMainWindow):
             self.chemcraft_linux_exe = Path(dialog.get_chemcraft_linux_path())
             self.chemcraft_windows_exe = Path(dialog.get_chemcraft_windows_path())
             self.orca_locale = dialog.get_locale()  # ← сохраняем выбранную локаль
+            self.disable_gpu = dialog.get_disable_gpu()
             self.save_settings()
             QMessageBox.information(self, "Success", "Settings saved.")
 
@@ -857,6 +874,46 @@ class OrcaGUI(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to create template:\n{e}")
+
+    def reload_current_file(self):
+        """Перезагружает текущий файл из диска"""
+        if not self.current_file or not self.current_file.is_file():
+            return
+        
+        try:
+            with open(self.current_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.editor.setPlainText(content)
+            self.file_path_label.setText(f"Opened: {self.current_file}")
+        except Exception as e:
+            QMessageBox.warning(self, "Reload Error", f"Failed to reload file:\n{e}")
+
+    def rename_file(self, old_path: Path):
+        """Переименовывает файл или папку"""
+        old_name = old_path.name
+        
+        new_name, ok = QInputDialog.getText(
+            self, "Rename", "New name:", text=old_name
+        )
+        
+        if not ok or not new_name.strip() or new_name == old_name:
+            return
+            
+        new_name = new_name.strip()
+        new_path = old_path.parent / new_name
+        
+        if new_path.exists():
+            QMessageBox.warning(self, "Error", f"File/folder already exists:\n{new_path}")
+            return
+            
+        try:
+            old_path.rename(new_path)
+            # Обновляем текущий открытый файл, если он был переименован
+            if self.current_file and self.current_file == old_path:
+                self.current_file = new_path
+                self.file_path_label.setText(str(new_path))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to rename:\n{e}")
     
 
 def main():

@@ -10,7 +10,7 @@ class OrcaJob(QObject):
     error_occurred = Signal(str, str)
     completed = Signal()
 
-    def __init__(self, orca_exe: Path, inp_path: Path, out_path: Path, locale: str = "C.UTF-8"):
+    def __init__(self, orca_exe: Path, inp_path: Path, out_path: Path, locale: str = "C.UTF-8", disable_gpu: bool = True):
         super().__init__()
         
         # Проверка на None
@@ -26,6 +26,8 @@ class OrcaJob(QObject):
         self._proc = None
         self._temp_bat = None
         self.orca_locale = locale
+        self.disable_gpu = disable_gpu
+
     def run(self):
         try:
             inp_name = self.inp_path.name
@@ -44,6 +46,12 @@ class OrcaJob(QObject):
             env.pop('PYTHONPATH', None)
             env.pop('PYTHONHOME', None)
             env['LC_ALL'] = self.orca_locale
+            if self.disable_gpu:
+                env['CUDA_VISIBLE_DEVICES'] = '-1'
+                env['OMPI_MCA_btl'] = 'tcp,self'
+                env['OMPI_MCA_pml'] = 'ob1'
+                env['UCX_TLS'] = 'tcp'
+                env['OMPI_MCA_cuda_support'] = '0'
 
             # === Запускаем ORCA напрямую (без mpiexec!) ===
             cmd = [str(self.orca_exe), inp_name]
